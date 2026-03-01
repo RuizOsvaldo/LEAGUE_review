@@ -1,0 +1,139 @@
+import {
+  pgTable,
+  pgEnum,
+  serial,
+  text,
+  integer,
+  boolean,
+  timestamp,
+  json,
+  primaryKey,
+  unique,
+} from 'drizzle-orm/pg-core';
+
+// ---------- Enums ----------
+
+export const reviewStatusEnum = pgEnum('review_status', ['pending', 'draft', 'sent']);
+
+// ---------- Tables ----------
+
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  name: text('name').notNull(),
+  googleId: text('google_id'),
+  passwordHash: text('password_hash'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+// connect-pg-simple requires sid/sess/expire columns
+export const sessions = pgTable('sessions', {
+  sid: text('sid').primaryKey(),
+  sess: json('sess').notNull(),
+  expire: timestamp('expire').notNull(),
+});
+
+export const instructors = pgTable('instructors', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id),
+  isActive: boolean('is_active').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const students = pgTable('students', {
+  id: serial('id').primaryKey(),
+  name: text('name').notNull(),
+  guardianEmail: text('guardian_email'),
+  guardianName: text('guardian_name'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const instructorStudents = pgTable(
+  'instructor_students',
+  {
+    instructorId: integer('instructor_id')
+      .notNull()
+      .references(() => instructors.id),
+    studentId: integer('student_id')
+      .notNull()
+      .references(() => students.id),
+    assignedAt: timestamp('assigned_at').notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.instructorId, t.studentId] })],
+);
+
+export const monthlyReviews = pgTable('monthly_reviews', {
+  id: serial('id').primaryKey(),
+  instructorId: integer('instructor_id')
+    .notNull()
+    .references(() => instructors.id),
+  studentId: integer('student_id')
+    .notNull()
+    .references(() => students.id),
+  month: text('month').notNull(), // YYYY-MM
+  status: reviewStatusEnum('status').notNull().default('pending'),
+  subject: text('subject'),
+  body: text('body'),
+  sentAt: timestamp('sent_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const reviewTemplates = pgTable('review_templates', {
+  id: serial('id').primaryKey(),
+  instructorId: integer('instructor_id')
+    .notNull()
+    .references(() => instructors.id),
+  name: text('name').notNull(),
+  subject: text('subject').notNull(),
+  body: text('body').notNull(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const serviceFeedback = pgTable('service_feedback', {
+  id: serial('id').primaryKey(),
+  reviewId: integer('review_id')
+    .notNull()
+    .references(() => monthlyReviews.id),
+  rating: integer('rating').notNull(), // 1–5
+  comment: text('comment'),
+  submittedAt: timestamp('submitted_at').notNull().defaultNow(),
+});
+
+export const adminSettings = pgTable('admin_settings', {
+  id: serial('id').primaryKey(),
+  email: text('email').notNull().unique(),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
+export const pike13Tokens = pgTable('pike13_tokens', {
+  id: serial('id').primaryKey(),
+  instructorId: integer('instructor_id')
+    .notNull()
+    .references(() => instructors.id),
+  accessToken: text('access_token').notNull(),
+  refreshToken: text('refresh_token'),
+  expiresAt: timestamp('expires_at'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+}, (t) => [unique().on(t.instructorId)]);
+
+// ---------- Exported types ----------
+
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+export type Instructor = typeof instructors.$inferSelect;
+export type NewInstructor = typeof instructors.$inferInsert;
+export type Student = typeof students.$inferSelect;
+export type NewStudent = typeof students.$inferInsert;
+export type MonthlyReview = typeof monthlyReviews.$inferSelect;
+export type NewMonthlyReview = typeof monthlyReviews.$inferInsert;
+export type ReviewTemplate = typeof reviewTemplates.$inferSelect;
+export type NewReviewTemplate = typeof reviewTemplates.$inferInsert;
+export type ServiceFeedback = typeof serviceFeedback.$inferSelect;
+export type NewServiceFeedback = typeof serviceFeedback.$inferInsert;
+export type AdminSetting = typeof adminSettings.$inferSelect;
+export type Pike13Token = typeof pike13Tokens.$inferSelect;

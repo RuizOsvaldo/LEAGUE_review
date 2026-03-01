@@ -1,0 +1,215 @@
+/**
+ * DB schema round-trip tests.
+ *
+ * Requires a running PostgreSQL instance with DATABASE_URL set.
+ * Migrations must be applied before running: npm run db:migrate
+ */
+import { drizzle } from 'drizzle-orm/node-postgres';
+import { Pool } from 'pg';
+import * as schema from '../../server/src/db/schema';
+import { eq } from 'drizzle-orm';
+
+let pool: Pool;
+let db: ReturnType<typeof drizzle<typeof schema>>;
+
+beforeAll(async () => {
+  if (!process.env.DATABASE_URL) {
+    throw new Error('DATABASE_URL must be set for DB tests');
+  }
+  pool = new Pool({ connectionString: process.env.DATABASE_URL });
+  db = drizzle(pool, { schema });
+
+  // Clean up any leftover test data in reverse FK order
+  await db.delete(schema.pike13Tokens);
+  await db.delete(schema.serviceFeedback);
+  await db.delete(schema.reviewTemplates);
+  await db.delete(schema.monthlyReviews);
+  await db.delete(schema.instructorStudents);
+  await db.delete(schema.instructors);
+  await db.delete(schema.students);
+  await db.delete(schema.adminSettings);
+  await db.delete(schema.sessions);
+  await db.delete(schema.users);
+});
+
+afterAll(async () => {
+  await pool.end();
+});
+
+describe('users', () => {
+  it('inserts and retrieves a user', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'test@example.com', name: 'Test User' })
+      .returning();
+    expect(user.id).toBeDefined();
+    expect(user.email).toBe('test@example.com');
+    expect(user.name).toBe('Test User');
+    expect(user.createdAt).toBeInstanceOf(Date);
+  });
+});
+
+describe('sessions', () => {
+  it('inserts and retrieves a session', async () => {
+    const expire = new Date(Date.now() + 86400_000);
+    await db.insert(schema.sessions).values({
+      sid: 'test-sid-001',
+      sess: { cookie: { expires: expire.toISOString() } },
+      expire,
+    });
+    const [session] = await db
+      .select()
+      .from(schema.sessions)
+      .where(eq(schema.sessions.sid, 'test-sid-001'));
+    expect(session.sid).toBe('test-sid-001');
+    expect(session.expire).toBeInstanceOf(Date);
+  });
+});
+
+describe('instructors', () => {
+  it('inserts and retrieves an instructor linked to a user', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instructor@example.com', name: 'Instructor User' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    expect(instructor.id).toBeDefined();
+    expect(instructor.isActive).toBe(false);
+    expect(instructor.userId).toBe(user.id);
+  });
+});
+
+describe('students', () => {
+  it('inserts and retrieves a student', async () => {
+    const [student] = await db
+      .insert(schema.students)
+      .values({ name: 'Student One', guardianEmail: 'guardian@example.com' })
+      .returning();
+    expect(student.id).toBeDefined();
+    expect(student.name).toBe('Student One');
+  });
+});
+
+describe('instructor_students', () => {
+  it('inserts and retrieves an assignment', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr2@example.com', name: 'Instr2' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [student] = await db
+      .insert(schema.students)
+      .values({ name: 'Student Two' })
+      .returning();
+    await db
+      .insert(schema.instructorStudents)
+      .values({ instructorId: instructor.id, studentId: student.id });
+    const [row] = await db
+      .select()
+      .from(schema.instructorStudents)
+      .where(eq(schema.instructorStudents.instructorId, instructor.id));
+    expect(row.studentId).toBe(student.id);
+  });
+});
+
+describe('monthly_reviews', () => {
+  it('inserts with default pending status', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr3@example.com', name: 'Instr3' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [student] = await db
+      .insert(schema.students)
+      .values({ name: 'Student Three' })
+      .returning();
+    const [review] = await db
+      .insert(schema.monthlyReviews)
+      .values({ instructorId: instructor.id, studentId: student.id, month: '2025-01' })
+      .returning();
+    expect(review.status).toBe('pending');
+    expect(review.month).toBe('2025-01');
+  });
+});
+
+describe('review_templates', () => {
+  it('inserts and retrieves a template', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr4@example.com', name: 'Instr4' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [tmpl] = await db
+      .insert(schema.reviewTemplates)
+      .values({ instructorId: instructor.id, name: 'Default', subject: 'Hi', body: 'Body' })
+      .returning();
+    expect(tmpl.name).toBe('Default');
+  });
+});
+
+describe('service_feedback', () => {
+  it('inserts and retrieves feedback', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr5@example.com', name: 'Instr5' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [student] = await db
+      .insert(schema.students)
+      .values({ name: 'Student Four' })
+      .returning();
+    const [review] = await db
+      .insert(schema.monthlyReviews)
+      .values({ instructorId: instructor.id, studentId: student.id, month: '2025-02' })
+      .returning();
+    const [fb] = await db
+      .insert(schema.serviceFeedback)
+      .values({ reviewId: review.id, rating: 5 })
+      .returning();
+    expect(fb.rating).toBe(5);
+  });
+});
+
+describe('admin_settings', () => {
+  it('inserts and retrieves an admin email', async () => {
+    const [setting] = await db
+      .insert(schema.adminSettings)
+      .values({ email: 'admin@example.com' })
+      .returning();
+    expect(setting.email).toBe('admin@example.com');
+  });
+});
+
+describe('pike13_tokens', () => {
+  it('inserts and retrieves a token row', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr6@example.com', name: 'Instr6' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [token] = await db
+      .insert(schema.pike13Tokens)
+      .values({ instructorId: instructor.id, accessToken: 'tok-abc' })
+      .returning();
+    expect(token.accessToken).toBe('tok-abc');
+    expect(token.instructorId).toBe(instructor.id);
+  });
+});

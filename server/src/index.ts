@@ -8,11 +8,16 @@ const envPath = path.resolve(__dirname, '../../.env');
 if (fs.existsSync(envPath)) {
   dotenv.config({ path: envPath });
 }
+
 import express from 'express';
 import cors from 'cors';
 import pinoHttp from 'pino-http';
+import session from 'express-session';
+import connectPgSimple from 'connect-pg-simple';
+import { Pool } from 'pg';
 import { healthRouter } from './routes/health';
 import { counterRouter } from './routes/counter';
+import { authRouter } from './routes/auth';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -22,8 +27,33 @@ app.use(cors());
 app.use(express.json());
 app.use(pinoHttp({ level: process.env.LOG_LEVEL || 'info' }));
 
+// Session middleware — use PG store when DATABASE_URL is set and not in test mode
+const sessionStore =
+  process.env.DATABASE_URL && process.env.NODE_ENV !== 'test'
+    ? (() => {
+        const PgSession = connectPgSimple(session);
+        const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
+        return new PgSession({ pool: pgPool, tableName: 'sessions', createTableIfMissing: false });
+      })()
+    : undefined; // express-session defaults to MemoryStore
+
+app.use(
+  session({
+    store: sessionStore,
+    secret: process.env.SESSION_SECRET || 'dev-secret-change-me',
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    },
+  }),
+);
+
 app.use('/api', healthRouter);
 app.use('/api', counterRouter);
+app.use('/api/auth', authRouter);
 
 app.use(errorHandler);
 
@@ -37,8 +67,11 @@ if (process.env.NODE_ENV === 'production') {
   });
 }
 
-app.listen(port, '0.0.0.0', () => {
-  console.log(`Server listening on http://localhost:${port}`);
-});
+// Only start listening when run directly (not imported by tests)
+if (require.main === module) {
+  app.listen(port, '0.0.0.0', () => {
+    console.log(`Server listening on http://localhost:${port}`);
+  });
+}
 
 export default app;

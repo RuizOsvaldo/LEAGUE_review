@@ -1,21 +1,13 @@
-import { prisma } from './prisma';
-
+// In-memory counter stub (template demo feature)
+const counters: Record<string, number> = {};
 const COUNTER_NAME = 'demo';
 
 export async function getCounter() {
-  const counter = await prisma.counter.upsert({
-    where: { name: COUNTER_NAME },
-    update: {},
-    create: { name: COUNTER_NAME, value: 0 },
-  });
-  return { name: counter.name, value: counter.value };
+  const value = counters[COUNTER_NAME] ?? 0;
+  return { name: COUNTER_NAME, value };
 }
 
 export async function incrementCounter() {
-  const counter = await prisma.counter.upsert({
-    where: { name: COUNTER_NAME },
-    update: { value: { increment: 1 } },
-    create: { name: COUNTER_NAME, value: 1 },
-  });
-  return { name: counter.name, value: counter.value };
+  counters[COUNTER_NAME] = (counters[COUNTER_NAME] ?? 0) + 1;
+  return { name: COUNTER_NAME, value: counters[COUNTER_NAME] };
 }
