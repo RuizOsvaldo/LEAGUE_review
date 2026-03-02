@@ -18,6 +18,10 @@ import { Pool } from 'pg';
 import { healthRouter } from './routes/health';
 import { counterRouter } from './routes/counter';
 import { authRouter } from './routes/auth';
+import { instructorRouter } from './routes/instructor';
+import { reviewsRouter } from './routes/reviews';
+import { templatesRouter } from './routes/templates';
+import { checkinsRouter } from './routes/checkins';
 import { errorHandler } from './middleware/errorHandler';
 
 const app = express();
@@ -54,6 +58,10 @@ app.use(
 app.use('/api', healthRouter);
 app.use('/api', counterRouter);
 app.use('/api/auth', authRouter);
+app.use('/api', instructorRouter);
+app.use('/api', reviewsRouter);
+app.use('/api', templatesRouter);
+app.use('/api', checkinsRouter);
 
 app.use(errorHandler);
 

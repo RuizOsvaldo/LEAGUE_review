@@ -1,9 +1,12 @@
 ---
-id: "001"
+id: '001'
 title: Foundation
-status: planning
+status: done
 branch: sprint/001-foundation
-use-cases: [SUC-001, SUC-002, SUC-003]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
 ---
 
 # Sprint 001: Foundation

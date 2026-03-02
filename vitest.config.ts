@@ -20,6 +20,7 @@ export default defineConfig({
       '@tanstack/react-query': path.resolve(clientRoot, 'node_modules/@tanstack/react-query'),
       '@testing-library/react': path.resolve(clientRoot, 'node_modules/@testing-library/react'),
       '@testing-library/jest-dom': path.resolve(clientRoot, 'node_modules/@testing-library/jest-dom'),
+      '@testing-library/user-event': path.resolve(clientRoot, 'node_modules/@testing-library/user-event'),
     },
   },
   test: {

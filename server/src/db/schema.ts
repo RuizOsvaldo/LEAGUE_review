@@ -64,22 +64,26 @@ export const instructorStudents = pgTable(
   (t) => [primaryKey({ columns: [t.instructorId, t.studentId] })],
 );
 
-export const monthlyReviews = pgTable('monthly_reviews', {
-  id: serial('id').primaryKey(),
-  instructorId: integer('instructor_id')
-    .notNull()
-    .references(() => instructors.id),
-  studentId: integer('student_id')
-    .notNull()
-    .references(() => students.id),
-  month: text('month').notNull(), // YYYY-MM
-  status: reviewStatusEnum('status').notNull().default('pending'),
-  subject: text('subject'),
-  body: text('body'),
-  sentAt: timestamp('sent_at'),
-  createdAt: timestamp('created_at').notNull().defaultNow(),
-  updatedAt: timestamp('updated_at').notNull().defaultNow(),
-});
+export const monthlyReviews = pgTable(
+  'monthly_reviews',
+  {
+    id: serial('id').primaryKey(),
+    instructorId: integer('instructor_id')
+      .notNull()
+      .references(() => instructors.id),
+    studentId: integer('student_id')
+      .notNull()
+      .references(() => students.id),
+    month: text('month').notNull(), // YYYY-MM
+    status: reviewStatusEnum('status').notNull().default('pending'),
+    subject: text('subject'),
+    body: text('body'),
+    sentAt: timestamp('sent_at'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.instructorId, t.studentId, t.month)],
+);
 
 export const reviewTemplates = pgTable('review_templates', {
   id: serial('id').primaryKey(),
@@ -121,6 +125,31 @@ export const pike13Tokens = pgTable('pike13_tokens', {
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
 }, (t) => [unique().on(t.instructorId)]);
 
+export const taCheckins = pgTable(
+  'ta_checkins',
+  {
+    id: serial('id').primaryKey(),
+    instructorId: integer('instructor_id')
+      .notNull()
+      .references(() => instructors.id),
+    taName: text('ta_name').notNull(),
+    weekOf: text('week_of').notNull(), // ISO date of Monday, e.g. "2026-03-02"
+    wasPresent: boolean('was_present').notNull(),
+    submittedAt: timestamp('submitted_at').notNull().defaultNow(),
+  },
+  (t) => [unique().on(t.instructorId, t.taName, t.weekOf)],
+);
+
+export const adminNotifications = pgTable('admin_notifications', {
+  id: serial('id').primaryKey(),
+  fromUserId: integer('from_user_id')
+    .notNull()
+    .references(() => users.id),
+  message: text('message').notNull(),
+  isRead: boolean('is_read').notNull().default(false),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+});
+
 // ---------- Exported types ----------
 
 export type User = typeof users.$inferSelect;
@@ -137,3 +166,7 @@ export type ServiceFeedback = typeof serviceFeedback.$inferSelect;
 export type NewServiceFeedback = typeof serviceFeedback.$inferInsert;
 export type AdminSetting = typeof adminSettings.$inferSelect;
 export type Pike13Token = typeof pike13Tokens.$inferSelect;
+export type TaCheckin = typeof taCheckins.$inferSelect;
+export type NewTaCheckin = typeof taCheckins.$inferInsert;
+export type AdminNotification = typeof adminNotifications.$inferSelect;
+export type NewAdminNotification = typeof adminNotifications.$inferInsert;

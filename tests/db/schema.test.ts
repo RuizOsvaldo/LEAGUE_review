@@ -20,6 +20,8 @@ beforeAll(async () => {
   db = drizzle(pool, { schema });
 
   // Clean up any leftover test data in reverse FK order
+  await db.delete(schema.taCheckins);
+  await db.delete(schema.adminNotifications);
   await db.delete(schema.pike13Tokens);
   await db.delete(schema.serviceFeedback);
   await db.delete(schema.reviewTemplates);
@@ -211,5 +213,95 @@ describe('pike13_tokens', () => {
       .returning();
     expect(token.accessToken).toBe('tok-abc');
     expect(token.instructorId).toBe(instructor.id);
+  });
+});
+
+describe('ta_checkins', () => {
+  it('inserts and retrieves a check-in record', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr7@example.com', name: 'Instr7' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [checkin] = await db
+      .insert(schema.taCheckins)
+      .values({ instructorId: instructor.id, taName: 'Alice TA', weekOf: '2026-03-02', wasPresent: true })
+      .returning();
+    expect(checkin.taName).toBe('Alice TA');
+    expect(checkin.weekOf).toBe('2026-03-02');
+    expect(checkin.wasPresent).toBe(true);
+  });
+
+  it('rejects duplicate (instructorId, taName, weekOf)', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr8@example.com', name: 'Instr8' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    await db.insert(schema.taCheckins).values({
+      instructorId: instructor.id,
+      taName: 'Bob TA',
+      weekOf: '2026-03-02',
+      wasPresent: true,
+    });
+    await expect(
+      db.insert(schema.taCheckins).values({
+        instructorId: instructor.id,
+        taName: 'Bob TA',
+        weekOf: '2026-03-02',
+        wasPresent: false,
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+describe('admin_notifications', () => {
+  it('inserts and retrieves a notification', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr9@example.com', name: 'Instr9' })
+      .returning();
+    const [notif] = await db
+      .insert(schema.adminNotifications)
+      .values({ fromUserId: user.id, message: 'Please create TA profile for Alice' })
+      .returning();
+    expect(notif.message).toBe('Please create TA profile for Alice');
+    expect(notif.isRead).toBe(false);
+    expect(notif.fromUserId).toBe(user.id);
+  });
+});
+
+describe('monthly_reviews unique constraint', () => {
+  it('rejects duplicate (instructorId, studentId, month)', async () => {
+    const [user] = await db
+      .insert(schema.users)
+      .values({ email: 'instr10@example.com', name: 'Instr10' })
+      .returning();
+    const [instructor] = await db
+      .insert(schema.instructors)
+      .values({ userId: user.id })
+      .returning();
+    const [student] = await db
+      .insert(schema.students)
+      .values({ name: 'Student Uniq' })
+      .returning();
+    await db.insert(schema.monthlyReviews).values({
+      instructorId: instructor.id,
+      studentId: student.id,
+      month: '2026-03',
+    });
+    await expect(
+      db.insert(schema.monthlyReviews).values({
+        instructorId: instructor.id,
+        studentId: student.id,
+        month: '2026-03',
+      }),
+    ).rejects.toThrow();
   });
 });

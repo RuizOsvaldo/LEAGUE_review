@@ -43,9 +43,11 @@ describe('Routing', () => {
     expect(screen.getByText('Sign In')).toBeInTheDocument()
   })
 
-  it('authenticated instructor /dashboard renders dashboard stub', () => {
+  it('authenticated instructor /dashboard renders dashboard page', () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, json: () => Promise.resolve({}) })))
     renderAt('/dashboard', INSTRUCTOR)
-    expect(screen.getByText('Dashboard — coming in Sprint 002')).toBeInTheDocument()
+    expect(screen.getByRole('heading', { name: 'Dashboard' })).toBeInTheDocument()
+    vi.restoreAllMocks()
   })
 
   it('authenticated admin /admin renders admin stub', () => {
