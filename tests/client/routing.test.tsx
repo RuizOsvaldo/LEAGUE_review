@@ -61,4 +61,33 @@ describe('Routing', () => {
     renderAt('/totally-unknown-route', null)
     expect(screen.getByText('404')).toBeInTheDocument()
   })
+
+  it('/feedback/:token renders FeedbackPage without auth', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({
+          status: 404,
+          ok: false,
+          json: () => Promise.resolve({}),
+        }),
+      ),
+    )
+    renderAt('/feedback/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee', null)
+    expect(await screen.findByText('Feedback link not found.')).toBeInTheDocument()
+    vi.restoreAllMocks()
+  })
+
+  it('/admin/feedback renders AdminFeedbackPage within AdminLayout for admin', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() =>
+        Promise.resolve({ ok: true, json: () => Promise.resolve([]) }),
+      ),
+    )
+    renderAt('/admin/feedback', ADMIN)
+    expect(await screen.findByRole('heading', { name: 'Guardian Feedback' })).toBeInTheDocument()
+    expect(screen.getByText('Feedback')).toBeInTheDocument() // nav link
+    vi.restoreAllMocks()
+  })
 })

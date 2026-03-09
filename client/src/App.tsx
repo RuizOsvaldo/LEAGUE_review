@@ -11,6 +11,8 @@ import { AdminDashboardPage } from './pages/AdminDashboardPage'
 import { InstructorListPage } from './pages/InstructorListPage'
 import { CompliancePage } from './pages/CompliancePage'
 import { VolunteerHoursPage } from './pages/VolunteerHoursPage'
+import { FeedbackPage } from './pages/FeedbackPage'
+import { AdminFeedbackPage } from './pages/AdminFeedbackPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AdminLayout } from './components/AdminLayout'
@@ -79,6 +81,13 @@ function App() {
           </AdminLayout>
         </ProtectedRoute>
       </Route>
+      <Route path="/admin/feedback">
+        <ProtectedRoute role="admin">
+          <AdminLayout>
+            <AdminFeedbackPage />
+          </AdminLayout>
+        </ProtectedRoute>
+      </Route>
       <Route path="/admin">
         <ProtectedRoute role="admin">
           <AdminLayout>
@@ -86,6 +95,7 @@ function App() {
           </AdminLayout>
         </ProtectedRoute>
       </Route>
+      <Route path="/feedback/:token" component={FeedbackPage} />
       <Route component={NotFoundPage} />
     </Switch>
   )

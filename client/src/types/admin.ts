@@ -25,6 +25,17 @@ export interface AdminNotificationDto {
   createdAt: string
 }
 
+export interface AdminFeedbackDto {
+  id: number
+  reviewId: number
+  studentName: string
+  instructorName: string
+  month: string
+  rating: number
+  comment: string | null
+  submittedAt: string
+}
+
 export interface VolunteerHourDto {
   id: number
   volunteerName: string

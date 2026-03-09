@@ -5,6 +5,7 @@ const NAV_LINKS = [
   { href: '/admin/instructors', label: 'Instructors' },
   { href: '/admin/compliance', label: 'Compliance' },
   { href: '/admin/volunteer-hours', label: 'Volunteer Hours' },
+  { href: '/admin/feedback', label: 'Feedback' },
 ]
 
 interface AdminLayoutProps {
