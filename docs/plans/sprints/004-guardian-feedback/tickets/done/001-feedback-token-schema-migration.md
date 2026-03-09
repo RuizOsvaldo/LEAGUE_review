@@ -1,8 +1,9 @@
 ---
-id: "001"
+id: '001'
 title: feedback_token schema migration
-status: todo
-use-cases: [SUC-004]
+status: done
+use-cases:
+- SUC-004
 depends-on: []
 ---
 
