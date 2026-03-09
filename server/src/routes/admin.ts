@@ -1,13 +1,15 @@
 import { Router } from 'express';
-import { eq, and, count, sql } from 'drizzle-orm';
+import { eq, and, count, sql, desc } from 'drizzle-orm';
 import { db } from '../db';
 import {
   instructors,
   users,
   instructorStudents,
   monthlyReviews,
+  students,
   taCheckins,
   adminNotifications,
+  serviceFeedback,
 } from '../db/schema';
 import { isAdmin } from '../middleware/auth';
 import { lastMondayOfMonth } from '../utils/dateUtils';
@@ -175,6 +177,36 @@ adminRouter.get('/admin/notifications', async (req, res, next) => {
       .orderBy(sql`${adminNotifications.createdAt} DESC`);
 
     res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/admin/feedback
+adminRouter.get('/admin/feedback', async (_req, res, next) => {
+  try {
+    const rows = await db
+      .select({
+        id: serviceFeedback.id,
+        reviewId: serviceFeedback.reviewId,
+        studentName: students.name,
+        instructorName: users.name,
+        month: monthlyReviews.month,
+        rating: serviceFeedback.rating,
+        comment: serviceFeedback.comment,
+        submittedAt: serviceFeedback.submittedAt,
+      })
+      .from(serviceFeedback)
+      .innerJoin(monthlyReviews, eq(serviceFeedback.reviewId, monthlyReviews.id))
+      .innerJoin(students, eq(monthlyReviews.studentId, students.id))
+      .innerJoin(instructors, eq(monthlyReviews.instructorId, instructors.id))
+      .innerJoin(users, eq(instructors.userId, users.id))
+      .orderBy(desc(serviceFeedback.submittedAt));
+
+    res.json(rows.map((r) => ({
+      ...r,
+      submittedAt: r.submittedAt.toISOString(),
+    })));
   } catch (err) {
     next(err);
   }

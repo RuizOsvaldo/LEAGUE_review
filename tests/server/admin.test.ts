@@ -264,6 +264,84 @@ describe('GET /api/admin/notifications', () => {
   });
 });
 
+// ---- Feedback ----
+
+describe('GET /api/admin/feedback', () => {
+  let feedbackReviewId: number;
+  let feedbackStudentId: number;
+
+  beforeAll(async () => {
+    const [student] = await db
+      .insert(schema.students)
+      .values({ name: 'Feedback Student' })
+      .returning();
+    feedbackStudentId = student.id;
+
+    const [review] = await db
+      .insert(schema.monthlyReviews)
+      .values({ instructorId, studentId: feedbackStudentId, month: '2026-04' })
+      .returning();
+    feedbackReviewId = review.id;
+  });
+
+  afterAll(async () => {
+    await db.delete(schema.serviceFeedback).where(eq(schema.serviceFeedback.reviewId, feedbackReviewId));
+    await db.delete(schema.monthlyReviews).where(eq(schema.monthlyReviews.id, feedbackReviewId));
+    await db.delete(schema.students).where(eq(schema.students.id, feedbackStudentId));
+  });
+
+  it('returns 403 without admin auth', async () => {
+    const app = buildTestApp();
+    const res = await request(app).get('/api/admin/feedback');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 403 for instructor role', async () => {
+    const app = buildTestApp();
+    const agent = request.agent(app);
+    await agent.post('/test/login').send(INSTRUCTOR);
+    const res = await agent.get('/api/admin/feedback');
+    expect(res.status).toBe(403);
+  });
+
+  it('returns empty array when no feedback exists', async () => {
+    const app = buildTestApp();
+    const agent = request.agent(app);
+    await agent.post('/test/login').send(ADMIN);
+    const res = await agent.get('/api/admin/feedback');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    // No feedback for this review yet
+    const fb = res.body.find((r: { reviewId: number }) => r.reviewId === feedbackReviewId);
+    expect(fb).toBeUndefined();
+  });
+
+  it('returns feedback DTOs with correct fields ordered by submittedAt DESC', async () => {
+    const [fb] = await db
+      .insert(schema.serviceFeedback)
+      .values({ reviewId: feedbackReviewId, rating: 4, comment: 'Very good' })
+      .returning();
+
+    const app = buildTestApp();
+    const agent = request.agent(app);
+    await agent.post('/test/login').send(ADMIN);
+    const res = await agent.get('/api/admin/feedback');
+    expect(res.status).toBe(200);
+
+    const item = res.body.find((r: { id: number }) => r.id === fb.id);
+    expect(item).toMatchObject({
+      id: fb.id,
+      reviewId: feedbackReviewId,
+      studentName: 'Feedback Student',
+      instructorName: 'Test Instructor',
+      month: '2026-04',
+      rating: 4,
+      comment: 'Very good',
+    });
+    expect(item.submittedAt).toBeDefined();
+  });
+});
+
 describe('PATCH /api/admin/notifications/:id/read', () => {
   it('marks a notification as read', async () => {
     const app = buildTestApp();
