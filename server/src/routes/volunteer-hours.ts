@@ -1,19 +1,55 @@
 import { Router } from 'express';
-import { eq, and, ilike, gte, lte } from 'drizzle-orm';
+import { eq, and, ilike, gte, lte, sql } from 'drizzle-orm';
 import { db } from '../db';
-import { volunteerHours } from '../db/schema';
+import { volunteerHours, volunteerSchedule } from '../db/schema';
 import { isAdmin } from '../middleware/auth';
 
 export const volunteerHoursRouter = Router();
 
 volunteerHoursRouter.use(isAdmin);
 
+// GET /api/admin/volunteer-hours/summary — YTD aggregate per volunteer with scheduled status
+volunteerHoursRouter.get('/admin/volunteer-hours/summary', async (req, res, next) => {
+  try {
+    const { from, to } = req.query as Record<string, string | undefined>;
+    const fromDate = from ? new Date(from) : new Date(new Date().getFullYear(), 0, 1);
+    const toDate = to ? new Date(to) : new Date();
+
+    // Start from volunteerSchedule so all TA/VA volunteers appear even with zero hours.
+    // The date range filter belongs on the JOIN condition, not WHERE, to preserve the LEFT JOIN.
+    const rows = await db
+      .select({
+        volunteerName: volunteerSchedule.volunteerName,
+        totalHours: sql<number>`coalesce(sum(${volunteerHours.hours}), 0)`,
+        isScheduled: sql<boolean>`coalesce(${volunteerSchedule.isScheduled}, false)`,
+      })
+      .from(volunteerSchedule)
+      .leftJoin(
+        volunteerHours,
+        and(
+          eq(volunteerHours.volunteerName, volunteerSchedule.volunteerName),
+          gte(volunteerHours.recordedAt, fromDate),
+          lte(volunteerHours.recordedAt, toDate),
+        ),
+      )
+      .where(sql`${volunteerSchedule.volunteerName} ~* '^(TA|VA)[\\s\\-]'`)
+      .groupBy(volunteerSchedule.volunteerName, volunteerSchedule.isScheduled)
+      .orderBy(sql`coalesce(sum(${volunteerHours.hours}), 0) desc`);
+
+    res.json(rows);
+  } catch (err) {
+    next(err);
+  }
+});
+
 // GET /api/admin/volunteer-hours
 volunteerHoursRouter.get('/admin/volunteer-hours', async (req, res, next) => {
   try {
     const { volunteerName, category, from, to } = req.query as Record<string, string | undefined>;
 
-    const conditions = [];
+    const conditions = [
+      sql`${volunteerHours.volunteerName} ~* '^(TA|VA)[\\s\\-]'`,
+    ];
     if (volunteerName) conditions.push(ilike(volunteerHours.volunteerName, `%${volunteerName}%`));
     if (category) conditions.push(eq(volunteerHours.category, category));
     if (from) conditions.push(gte(volunteerHours.recordedAt, new Date(from)));

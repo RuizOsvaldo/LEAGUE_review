@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { eq, and, count, sql } from 'drizzle-orm';
 import { db } from '../db';
-import { monthlyReviews, instructorStudents } from '../db/schema';
+import { monthlyReviews, instructorStudents, students } from '../db/schema';
 import { isActiveInstructor } from '../middleware/auth';
 
 export const instructorRouter = Router();
@@ -46,6 +46,29 @@ instructorRouter.get('/instructor/dashboard', isActiveInstructor, async (req, re
       draft: counts.draft,
       sent: counts.sent,
     });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// GET /api/instructor/students — list all students assigned to this instructor
+instructorRouter.get('/instructor/students', isActiveInstructor, async (req, res, next) => {
+  try {
+    const instructorId = req.session.user!.instructorId!;
+
+    const rows = await db
+      .select({
+        id: students.id,
+        name: students.name,
+        githubUsername: students.githubUsername,
+        assignedAt: instructorStudents.assignedAt,
+      })
+      .from(instructorStudents)
+      .innerJoin(students, eq(instructorStudents.studentId, students.id))
+      .where(eq(instructorStudents.instructorId, instructorId))
+      .orderBy(students.name);
+
+    res.json(rows);
   } catch (err) {
     next(err);
   }

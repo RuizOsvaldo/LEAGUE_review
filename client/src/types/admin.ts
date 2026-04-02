@@ -45,3 +45,9 @@ export interface VolunteerHourDto {
   recordedAt: string
   source: 'manual' | 'pike13'
 }
+
+export interface VolunteerSummaryDto {
+  volunteerName: string
+  totalHours: number
+  isScheduled: boolean
+}

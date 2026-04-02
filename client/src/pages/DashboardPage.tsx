@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearch } from 'wouter'
 import { MonthPicker } from '../components/MonthPicker'
@@ -12,6 +12,13 @@ interface DashboardData {
   sent: number
 }
 
+interface StudentRow {
+  id: number
+  name: string
+  githubUsername: string | null
+  assignedAt: string
+}
+
 function getCurrentMonth(): string {
   return new Date().toISOString().slice(0, 7)
 }
@@ -19,6 +26,12 @@ function getCurrentMonth(): string {
 async function fetchDashboard(month: string): Promise<DashboardData> {
   const res = await fetch(`/api/instructor/dashboard?month=${encodeURIComponent(month)}`)
   if (!res.ok) throw new Error('Failed to load dashboard')
+  return res.json()
+}
+
+async function fetchStudents(): Promise<StudentRow[]> {
+  const res = await fetch('/api/instructor/students')
+  if (!res.ok) throw new Error('Failed to load students')
   return res.json()
 }
 
@@ -49,16 +62,37 @@ export function DashboardPage() {
   const month = params.get('month') ?? getCurrentMonth()
 
   const [checkinDismissed, setCheckinDismissed] = useState(false)
+  const [studentSortKey, setStudentSortKey] = useState<'name' | 'githubUsername'>('name')
+  const [studentSortDir, setStudentSortDir] = useState<'asc' | 'desc'>('asc')
 
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ['dashboard', month],
     queryFn: () => fetchDashboard(month),
   })
 
+  const { data: studentList = [], isLoading: studentsLoading } = useQuery<StudentRow[]>({
+    queryKey: ['instructor', 'students'],
+    queryFn: fetchStudents,
+  })
+
   const { data: checkinData } = useQuery<PendingCheckinResponse>({
     queryKey: ['checkins', 'pending'],
     queryFn: fetchPendingCheckin,
   })
+
+  const sortedStudents = useMemo(() => {
+    return [...studentList].sort((a, b) => {
+      let cmp = 0
+      if (studentSortKey === 'name') cmp = a.name.localeCompare(b.name)
+      else if (studentSortKey === 'githubUsername') cmp = (a.githubUsername ?? '').localeCompare(b.githubUsername ?? '')
+      return studentSortDir === 'asc' ? cmp : -cmp
+    })
+  }, [studentList, studentSortKey, studentSortDir])
+
+  function handleStudentSort(key: 'name' | 'githubUsername') {
+    if (key === studentSortKey) setStudentSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    else { setStudentSortKey(key); setStudentSortDir('asc') }
+  }
 
   const showCheckinBanner =
     !checkinDismissed &&
@@ -103,7 +137,7 @@ export function DashboardPage() {
       )}
 
       {data && (
-        <div className="mt-6">
+        <div className="mt-4">
           <Link
             href={`/reviews?month=${month}`}
             className="inline-block rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
@@ -112,6 +146,69 @@ export function DashboardPage() {
           </Link>
         </div>
       )}
+
+      {/* Student list */}
+      <div className="mt-8">
+        <h2 className="mb-3 text-lg font-semibold text-slate-800">
+          My Students
+          {studentList.length > 0 && (
+            <span className="ml-2 text-sm font-normal text-slate-500">
+              ({studentList.length})
+            </span>
+          )}
+        </h2>
+
+        {studentsLoading && <p className="text-slate-500 text-sm">Loading students…</p>}
+
+        {!studentsLoading && studentList.length === 0 && (
+          <p className="text-sm text-slate-500">
+            No students assigned yet. Run a Pike13 sync to import your roster.
+          </p>
+        )}
+
+        {studentList.length > 0 && (
+          <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-200 bg-slate-50">
+                <tr>
+                  <th
+                    className="cursor-pointer select-none px-4 py-2.5 text-left font-medium text-slate-600 hover:text-slate-800 whitespace-nowrap"
+                    onClick={() => handleStudentSort('name')}
+                  >
+                    Name{' '}
+                    {studentSortKey === 'name'
+                      ? <span className="text-blue-600">{studentSortDir === 'asc' ? '↑' : '↓'}</span>
+                      : <span className="text-slate-300">↕</span>}
+                  </th>
+                  <th
+                    className="cursor-pointer select-none px-4 py-2.5 text-left font-medium text-slate-600 hover:text-slate-800 whitespace-nowrap"
+                    onClick={() => handleStudentSort('githubUsername')}
+                  >
+                    GitHub{' '}
+                    {studentSortKey === 'githubUsername'
+                      ? <span className="text-blue-600">{studentSortDir === 'asc' ? '↑' : '↓'}</span>
+                      : <span className="text-slate-300">↕</span>}
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {sortedStudents.map((s) => (
+                  <tr key={s.id} className="hover:bg-slate-50">
+                    <td className="px-4 py-2.5 font-medium text-slate-800">{s.name}</td>
+                    <td className="px-4 py-2.5 text-slate-500">
+                      {s.githubUsername ? (
+                        <span className="font-mono text-xs">{s.githubUsername}</span>
+                      ) : (
+                        <span className="text-slate-300">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

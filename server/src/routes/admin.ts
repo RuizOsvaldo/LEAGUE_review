@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, count, sql, desc } from 'drizzle-orm';
+import { eq, and, count, sql, desc, notLike, inArray } from 'drizzle-orm';
 import { db } from '../db';
 import {
   instructors,
@@ -15,6 +15,7 @@ import {
 import { isAdmin } from '../middleware/auth';
 import { runSync } from '../services/pike13Sync';
 import { lastMondayOfMonth } from '../utils/dateUtils';
+import sgMail from '@sendgrid/mail';
 
 export const adminRouter = Router();
 
@@ -40,7 +41,8 @@ adminRouter.get('/admin/instructors', async (_req, res, next) => {
         isActive: instructors.isActive,
       })
       .from(instructors)
-      .innerJoin(users, eq(instructors.userId, users.id));
+      .innerJoin(users, eq(instructors.userId, users.id))
+      .where(notLike(users.email, '%example.com%'));
 
     const studentCounts = await db
       .select({
@@ -58,6 +60,119 @@ adminRouter.get('/admin/instructors', async (_req, res, next) => {
     });
 
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/admin/instructors/email-reminders
+// Body: { instructorIds: number[], month?: string }
+adminRouter.post('/admin/instructors/email-reminders', async (req, res, next) => {
+  try {
+    const { instructorIds, month: monthParam } = req.body as {
+      instructorIds?: number[];
+      month?: string;
+    };
+
+    if (!Array.isArray(instructorIds) || instructorIds.length === 0) {
+      res.status(400).json({ error: 'instructorIds must be a non-empty array' });
+      return;
+    }
+
+    const month =
+      monthParam && /^\d{4}-\d{2}$/.test(monthParam)
+        ? monthParam
+        : new Date().toISOString().slice(0, 7);
+
+    const appUrl = (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/$/, '');
+    const fromEmail = process.env.SENDGRID_FROM_EMAIL;
+    if (!fromEmail) {
+      res.status(500).json({ error: 'Email is not configured (SENDGRID_FROM_EMAIL missing)' });
+      return;
+    }
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY ?? '');
+
+    // Load instructor details for the selected IDs
+    const instructorRows = await db
+      .select({ id: instructors.id, name: users.name, email: users.email })
+      .from(instructors)
+      .innerJoin(users, eq(instructors.userId, users.id))
+      .where(inArray(instructors.id, instructorIds));
+
+    let sent = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+
+    for (const instr of instructorRows) {
+      // Get all assigned students
+      const assignedStudents = await db
+        .select({ id: students.id, name: students.name })
+        .from(instructorStudents)
+        .innerJoin(students, eq(instructorStudents.studentId, students.id))
+        .where(eq(instructorStudents.instructorId, instr.id))
+        .orderBy(students.name);
+
+      if (assignedStudents.length === 0) {
+        skipped++;
+        continue;
+      }
+
+      // Find students who already have a 'sent' review this month
+      const sentReviews = await db
+        .select({ studentId: monthlyReviews.studentId })
+        .from(monthlyReviews)
+        .where(
+          and(
+            eq(monthlyReviews.instructorId, instr.id),
+            eq(monthlyReviews.month, month),
+            eq(monthlyReviews.status, 'sent'),
+          ),
+        );
+      const sentStudentIds = new Set(sentReviews.map((r) => r.studentId));
+
+      // Only include students who don't yet have a sent review
+      const needsReview = assignedStudents.filter((s) => !sentStudentIds.has(s.id));
+
+      if (needsReview.length === 0) {
+        skipped++;
+        continue;
+      }
+
+      const studentLines = needsReview.map((s) => `  • ${s.name}`).join('\n');
+      const [year, mon] = month.split('-');
+      const monthLabel = new Date(Number(year), Number(mon) - 1).toLocaleString('en-US', {
+        month: 'long',
+        year: 'numeric',
+      });
+
+      const text = [
+        `Hi ${instr.name},`,
+        '',
+        `This is a reminder to complete monthly progress reviews for ${monthLabel}.`,
+        '',
+        `Students needing reviews (${needsReview.length}):`,
+        studentLines,
+        '',
+        `Log in to complete your reviews:`,
+        `${appUrl}/reviews?month=${month}`,
+        '',
+        '— The LEAGUE Admin',
+      ].join('\n');
+
+      try {
+        await sgMail.send({
+          to: instr.email,
+          from: fromEmail,
+          subject: `[LEAGUE] Review reminder — ${needsReview.length} student${needsReview.length === 1 ? '' : 's'} pending for ${monthLabel}`,
+          text,
+        });
+        sent++;
+      } catch (emailErr) {
+        errors.push(`${instr.email}: ${(emailErr as Error).message}`);
+      }
+    }
+
+    res.json({ sent, skipped, errors });
   } catch (err) {
     next(err);
   }

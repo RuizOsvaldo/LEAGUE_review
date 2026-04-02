@@ -16,6 +16,7 @@ import { AdminFeedbackPage } from './pages/AdminFeedbackPage'
 import { NotFoundPage } from './pages/NotFoundPage'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AdminLayout } from './components/AdminLayout'
+import { InstructorLayout } from './components/InstructorLayout'
 
 function App() {
   return (
@@ -27,37 +28,37 @@ function App() {
       <Route path="/pending-activation" component={PendingActivationPage} />
       <Route path="/dashboard">
         <ProtectedRoute role="instructor">
-          <DashboardPage />
+          <InstructorLayout><DashboardPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/reviews">
         <ProtectedRoute role="instructor">
-          <ReviewListPage />
+          <InstructorLayout><ReviewListPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/reviews/:id">
         <ProtectedRoute role="instructor">
-          <ReviewEditorPage />
+          <InstructorLayout><ReviewEditorPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/templates">
         <ProtectedRoute role="instructor">
-          <TemplateListPage />
+          <InstructorLayout><TemplateListPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/templates/new">
         <ProtectedRoute role="instructor">
-          <TemplateEditorPage />
+          <InstructorLayout><TemplateEditorPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/templates/:id">
         <ProtectedRoute role="instructor">
-          <TemplateEditorPage />
+          <InstructorLayout><TemplateEditorPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/checkin">
         <ProtectedRoute role="instructor">
-          <CheckinPage />
+          <InstructorLayout><CheckinPage /></InstructorLayout>
         </ProtectedRoute>
       </Route>
       <Route path="/admin/instructors">

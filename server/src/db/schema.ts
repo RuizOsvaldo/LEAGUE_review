@@ -176,6 +176,12 @@ export const volunteerHours = pgTable(
   (t) => [unique().on(t.source, t.externalId)],
 );
 
+export const volunteerSchedule = pgTable('volunteer_schedule', {
+  volunteerName: text('volunteer_name').primaryKey(),
+  isScheduled: boolean('is_scheduled').notNull().default(false),
+  updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
 export const pike13AdminToken = pgTable('pike13_admin_token', {
   id: serial('id').primaryKey(),
   accessToken: text('access_token').notNull(),
@@ -206,5 +212,6 @@ export type AdminNotification = typeof adminNotifications.$inferSelect;
 export type NewAdminNotification = typeof adminNotifications.$inferInsert;
 export type VolunteerHour = typeof volunteerHours.$inferSelect;
 export type NewVolunteerHour = typeof volunteerHours.$inferInsert;
+export type VolunteerSchedule = typeof volunteerSchedule.$inferSelect;
 export type Pike13AdminToken = typeof pike13AdminToken.$inferSelect;
 export type NewPike13AdminToken = typeof pike13AdminToken.$inferInsert;
