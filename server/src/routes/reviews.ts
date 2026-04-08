@@ -474,10 +474,25 @@ reviewsRouter.post('/reviews/:id/generate-github-draft', async (req, res, next) 
       return m ? parseInt(m[1], 10) : null;
     }
 
+    // Extract human-readable lesson name from a path like lessons/03_loops/main.py → "loops"
+    function lessonName(filePath: string): string | null {
+      const m = filePath.match(/lessons?\/([^/]+)/i);
+      if (!m) return null;
+      // Strip leading digits and separator: "03_loops" → "loops", "05-functions" → "functions"
+      const name = m[1].replace(/^\d+[_\-]?/, '').replace(/_/g, ' ').trim();
+      return name || m[1];
+    }
+
+    // Strip the numeric prefix from the lesson folder in a file path for clean display
+    // e.g. lessons/03_loops/main.py → lessons/loops/main.py
+    function cleanLessonPath(filePath: string): string {
+      return filePath.replace(/(lessons?\/)[\d]+[_\-]?/i, '$1');
+    }
+
     // Build curriculum-focused commit summary
     // Only include files inside lessons/ directories; ignore infra files
     let highestLesson = 0;
-    const lessonsSeen = new Set<number>();
+    const lessonsSeen = new Map<number, string>(); // number → human-readable name
     let totalCommits = 0;
 
     const commitSummary = [...repoData.entries()]
@@ -495,7 +510,8 @@ reviewsRouter.post('/reviews/:id/generate-github-draft', async (req, res, next) 
           for (const f of lessonFiles) {
             const n = lessonNumber(f);
             if (n !== null) {
-              lessonsSeen.add(n);
+              const name = lessonName(f) ?? String(n);
+              lessonsSeen.set(n, name);
               if (n > highestLesson) highestLesson = n;
             }
           }
@@ -503,12 +519,12 @@ reviewsRouter.post('/reviews/:id/generate-github-draft', async (req, res, next) 
           // Skip commits with no lesson-directory changes
           if (lessonFiles.length === 0) continue;
 
-          // Show the lesson folder path (e.g. lessons/03_loops) rather than just filename
+          // Show the lesson folder path with number stripped (e.g. lessons/loops) rather than lessons/03_loops
           const fileSummary = lessonFiles
             .slice(0, 4)
             .map((f) => {
-              // Show up to the lesson subfolder + filename: lessons/03_loops/main.py
-              const parts = f.split('/');
+              // Show up to the lesson subfolder + filename, with numeric prefix removed
+              const parts = cleanLessonPath(f).split('/');
               const lessonIdx = parts.findIndex((p) => /^lessons?$/i.test(p));
               return lessonIdx >= 0
                 ? parts.slice(lessonIdx, lessonIdx + 3).join('/')
@@ -527,9 +543,13 @@ reviewsRouter.post('/reviews/:id/generate-github-draft', async (req, res, next) 
       .filter(Boolean)
       .join('\n\n');
 
-    // Summary of lesson progress for the prompt
-    const lessonProgressNote = highestLesson > 0
-      ? `Current curriculum position: reached lesson ${highestLesson}${lessonsSeen.size > 1 ? ` (worked across lessons ${[...lessonsSeen].sort((a, b) => a - b).join(', ')})` : ''}.`
+    // Summary of lesson progress for the prompt — use names, not numbers
+    const highestLessonName = lessonsSeen.get(highestLesson);
+    const allLessonNames = [...lessonsSeen.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, name]) => name);
+    const lessonProgressNote = highestLessonName
+      ? `Current curriculum position: working on "${highestLessonName}"${allLessonNames.length > 1 ? ` (also covered: ${allLessonNames.slice(0, -1).join(', ')})` : ''}.`
       : '';
 
     if (!commitSummary) {
@@ -557,13 +577,14 @@ reviewsRouter.post('/reviews/:id/generate-github-draft', async (req, res, next) 
 Tone rules:
 - Warm, positive, and encouraging throughout — frame slow progress as steady, consistent growth
 - Highlight the positives first and foremost
-- Focus on the highest-numbered (most advanced) lessons the student worked on — these show where they are in the curriculum now
-- Only briefly mention lower-numbered lessons if they're directly relevant to understanding the advanced work
+- Focus on the most advanced lessons the student worked on — these show where they are in the curriculum now
+- Refer to lessons by their topic name (e.g. "loops", "functions", "classes") — NEVER by a number like "lesson 3" or "lesson 7"
+- Only briefly mention earlier topics if they're directly relevant to understanding the advanced work
 - Do NOT make high-achieving students feel they need to do more — keep any suggestions light and optional-sounding
 - Base everything ONLY on the commit data and file paths provided; never invent details
 
 Structure (no headers, flowing paragraphs):
-1. Progress paragraph — what they worked on, what lesson they've reached, what concepts those lessons cover
+1. Progress paragraph — what they worked on, what topic they've reached, what concepts that topic covers
 2. Effort & highlights paragraph — specific things done well, how the work builds their skills
 3. Instructor notes (2–4 sentences only) — one gentle suggestion for the student if helpful, then a brief plan for how the instructor will support them next (e.g. "In our next sessions we'll build on X by introducing Y"). Keep this encouraging, never prescriptive.`,
         },
@@ -577,8 +598,8 @@ Curriculum activity (lessons/ directory, past 30 days):
 ${commitSummary}
 
 Instructions:
-- Open with attendance and their current lesson position
-- Lead with the most advanced lesson work, not the earliest
+- Open with attendance and the topic they're currently working on (use the topic name, not a number)
+- Lead with the most advanced topic work, not the earliest
 - Keep any improvement suggestion light — one sentence max, framed as "something to explore" not a gap
 - End with 2–3 sentences from the instructor on what they'll work on together next
 - No greeting, no sign-off, 3 paragraphs`,

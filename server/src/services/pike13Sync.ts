@@ -1,4 +1,4 @@
-import { eq, sql, and, count, gte, lt } from 'drizzle-orm';
+import { eq, sql, and } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from '../db/schema';
 
@@ -218,15 +218,37 @@ export async function runSync(
     chunkStart.setDate(chunkStart.getDate() + 7);
   }
 
-  // 5. Fetch upcoming events (next 4 weeks) to determine scheduled status for TAs/VAs
+  // 5. Fetch upcoming events.
+  //    — For volunteer scheduled-status: today → +4 weeks
+  //    — For the schedule table: this week's Sunday → +4 weeks (so the full current week is visible)
   const futureEnd = new Date(now);
   futureEnd.setDate(futureEnd.getDate() + 28);
+  const futureEndStr = futureEnd.toISOString().slice(0, 10);
+
+  // Sunday of the current UTC week (Pike13 times are UTC-based after JS Date conversion)
+  const thisWeekSunday = new Date(now);
+  const utcDayOfWeek = thisWeekSunday.getUTCDay(); // 0 = Sunday
+  thisWeekSunday.setUTCDate(thisWeekSunday.getUTCDate() - utcDayOfWeek);
+  thisWeekSunday.setUTCHours(0, 0, 0, 0);
+  const thisWeekSundayStr = thisWeekSunday.toISOString().slice(0, 10);
+
+  // Upcoming events from today (for volunteer scheduled-status only)
   const upcomingEvents = await fetchPike13<Pike13EventOccurrence>(
-    `${base}/api/v2/desk/event_occurrences?from=${now.toISOString().slice(0, 10)}&to=${futureEnd.toISOString().slice(0, 10)}&per_page=200`,
+    `${base}/api/v2/desk/event_occurrences?from=${now.toISOString().slice(0, 10)}&to=${futureEndStr}&per_page=200`,
     'event_occurrences',
     accessToken,
     fetchFn,
   );
+
+  // Schedule window events from this week's Sunday (to populate the full current week)
+  const scheduleWindowEvents = thisWeekSundayStr < now.toISOString().slice(0, 10)
+    ? await fetchPike13<Pike13EventOccurrence>(
+        `${base}/api/v2/desk/event_occurrences?from=${thisWeekSundayStr}&to=${futureEndStr}&per_page=200`,
+        'event_occurrences',
+        accessToken,
+        fetchFn,
+      )
+    : upcomingEvents;
 
   // 6. Volunteer scheduled status from upcoming events (any non-instructor staff)
   const scheduledNames = new Set<string>();
@@ -236,23 +258,16 @@ export async function runSync(
     }
   }
 
-  // 6b. Build instructor student count map for the event schedule
-  const instructorStudentCounts = await db
-    .select({
-      instructorId: schema.instructorStudents.instructorId,
-      cnt: count(schema.instructorStudents.studentId),
-    })
-    .from(schema.instructorStudents)
-    .groupBy(schema.instructorStudents.instructorId);
-
-  const instructorStudentCountMap = new Map(
-    instructorStudentCounts.map((r) => [r.instructorId, Number(r.cnt)]),
-  );
-
-  // 6c. Upsert upcoming event schedule data
-  for (const occ of upcomingEvents) {
+  // 6c. Upsert schedule table from the full current-week window
+  for (const occ of scheduleWindowEvents) {
     const instrList: Array<{ pike13Id: number; name: string; instructorId: number | null; studentCount: number }> = [];
     const volList: Array<{ pike13Id: number; name: string }> = [];
+
+    // Count students registered for this specific event (exclude cancellations).
+    // All instructors in the same event get the same per-event count.
+    const eventStudentCount = (occ.people ?? []).filter(
+      (p) => p.visit_state !== 'cancelled' && p.visit_state !== 'late_cancelled',
+    ).length;
 
     for (const staff of occ.staff_members ?? []) {
       const instructorId = pike13StaffIdToInstructorId.get(staff.id) ?? null;
@@ -261,7 +276,7 @@ export async function runSync(
           pike13Id: staff.id,
           name: staff.name,
           instructorId,
-          studentCount: instructorStudentCountMap.get(instructorId) ?? 0,
+          studentCount: eventStudentCount,
         });
       } else {
         volList.push({ pike13Id: staff.id, name: staff.name });
@@ -291,11 +306,24 @@ export async function runSync(
       });
   }
 
-  // Also delete stale events (past events no longer in upcoming window)
+  // Delete stale events:
+  // 1. Remove anything before this week's Sunday
   await db.execute(sql`
     DELETE FROM volunteer_event_schedule
-    WHERE start_at < now()
+    WHERE start_at < ${thisWeekSunday}
   `);
+
+  // 2. Remove events in the schedule window that Pike13 no longer returns
+  //    (e.g., classes that were cancelled or deleted since the last sync).
+  //    Guard: skip if Pike13 returned nothing — treat empty as a potential API error.
+  if (scheduleWindowEvents.length > 0) {
+    const freshIds = scheduleWindowEvents.map((occ) => String(occ.id));
+    await db.execute(sql`
+      DELETE FROM volunteer_event_schedule
+      WHERE start_at >= ${thisWeekSunday}
+      AND NOT (event_occurrence_id = ANY(${freshIds}))
+    `);
+  }
 
   // 7. Volunteer hours from YTD events (any non-instructor staff member).
   //    A volunteer can be listed on two simultaneous events — only count once per time slot.

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { VolunteerHourDto, VolunteerSummaryDto, ScheduleEventDto } from '../types/admin'
 
@@ -291,33 +291,35 @@ function SummaryTable({ rows }: { rows: VolunteerSummaryDto[] }) {
 
 // ---- Schedule view ----
 
-/** Return the ISO date string (YYYY-MM-DD) for Monday of the week containing `d`. */
-function getMondayOf(d: Date): string {
-  const day = d.getDay() // 0=Sun
-  const delta = day === 0 ? -6 : 1 - day
-  const monday = new Date(d)
-  monday.setDate(d.getDate() + delta)
-  return monday.toISOString().slice(0, 10)
+/** Format a Date as a local YYYY-MM-DD string (no UTC conversion). */
+function localDateStr(d: Date): string {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
 }
 
+/** Return the local YYYY-MM-DD for Sunday of the week containing `d`. */
+function getSundayOf(d: Date): string {
+  const dow = d.getDay() // 0=Sun, local timezone
+  const sunday = new Date(d)
+  sunday.setDate(d.getDate() - dow)
+  sunday.setHours(0, 0, 0, 0)
+  return localDateStr(sunday)
+}
+
+/** Add `n` days to a local YYYY-MM-DD string, returning a local YYYY-MM-DD. */
 function addDays(iso: string, n: number): string {
-  const d = new Date(iso + 'T00:00:00Z')
-  d.setUTCDate(d.getUTCDate() + n)
-  return d.toISOString().slice(0, 10)
+  const [y, m, d] = iso.split('-').map(Number)
+  return localDateStr(new Date(y, m - 1, d + n))
 }
 
-function formatWeekRange(monday: string): string {
-  const start = new Date(monday + 'T00:00:00Z')
-  const end = new Date(monday + 'T00:00:00Z')
-  end.setUTCDate(end.getUTCDate() + 6)
-  const fmt = (d: Date) =>
-    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+function formatWeekRange(sunday: string): string {
+  const [y, m, d] = sunday.split('-').map(Number)
+  const start = new Date(y, m - 1, d)
+  const end = new Date(y, m - 1, d + 6)
+  const fmt = (date: Date) => date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   return `${fmt(start)} – ${fmt(end)}`
-}
-
-function formatDayHeading(iso: string): string {
-  const d = new Date(iso + 'T00:00:00Z')
-  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })
 }
 
 function formatTime(iso: string): string {
@@ -330,28 +332,107 @@ async function fetchSchedule(weekOf: string): Promise<ScheduleEventDto[]> {
   return res.json()
 }
 
+/** One display block per instructor per start time — merges concurrent classes for the same instructor. */
+interface InstructorBlock {
+  blockKey: string
+  instructorName: string
+  startAt: string
+  endAt: string
+  studentCount: number
+  volunteers: Array<{ pike13Id: number; name: string }>
+}
+
+/**
+ * Pike13 sometimes uses a staff member slot for a class label (e.g. "Make-Up Lab")
+ * rather than a real instructor. These should not appear as standalone blocks.
+ */
+function isClassLabel(name: string): boolean {
+  return /\blab\b/i.test(name)
+}
+
+function aggregateByInstructor(events: ScheduleEventDto[]): InstructorBlock[] {
+  const byInstructor = new Map<string, InstructorBlock>()
+  for (const ev of events) {
+    const realInstrs = ev.instructors.filter((i) => !isClassLabel(i.name))
+    // Use real instructors; fall back to all (including labels) only if no real person present
+    const instrs = realInstrs.length > 0 ? realInstrs : ev.instructors
+
+    for (const instr of instrs) {
+      const key = `${instr.name}|${ev.startAt}`
+      const existing = byInstructor.get(key)
+      if (existing) {
+        // Same instructor, another concurrent event — add students, extend end time if needed
+        existing.studentCount += instr.studentCount
+        if (ev.endAt > existing.endAt) existing.endAt = ev.endAt
+        for (const vol of ev.volunteers) {
+          if (!existing.volunteers.some((v) => v.name === vol.name)) {
+            existing.volunteers.push(vol)
+          }
+        }
+      } else {
+        byInstructor.set(key, {
+          blockKey: key,
+          instructorName: instr.name,
+          startAt: ev.startAt,
+          endAt: ev.endAt,
+          studentCount: instr.studentCount,
+          volunteers: [...ev.volunteers],
+        })
+      }
+    }
+  }
+  return [...byInstructor.values()]
+}
+
+const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
 function ScheduleView() {
-  const [weekOf, setWeekOf] = useState(() => getMondayOf(new Date()))
+  const thisSunday = getSundayOf(new Date())
+  const maxWeekOf = addDays(thisSunday, 28) // 4 weeks ahead
+
+  const [weekOf, setWeekOf] = useState(() => getSundayOf(new Date()))
 
   const { data: events = [], isLoading, error } = useQuery<ScheduleEventDto[]>({
     queryKey: ['admin', 'volunteer-schedule', weekOf],
     queryFn: () => fetchSchedule(weekOf),
   })
 
-  // Group events by local date (YYYY-MM-DD of start)
-  const eventsByDay = useMemo(() => {
-    const map = new Map<string, ScheduleEventDto[]>()
+  // Build 7-day array starting on Sunday
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekOf, i))
+
+  // Group events by day, then by time slot — each event stays separate
+  const calendarByDay = useMemo(() => {
+    const byDay = new Map<string, Map<string, ScheduleEventDto[]>>()
+
     for (const ev of events) {
-      const day = new Date(ev.startAt).toISOString().slice(0, 10)
-      if (!map.has(day)) map.set(day, [])
-      map.get(day)!.push(ev)
+      // Use local date so evening classes don't bleed into the next UTC day
+      const day = localDateStr(new Date(ev.startAt))
+      // Group by start time only — concurrent classes for the same instructor merge into one block
+      const timeKey = ev.startAt
+
+      if (!byDay.has(day)) byDay.set(day, new Map())
+      const dayMap = byDay.get(day)!
+
+      if (!dayMap.has(timeKey)) dayMap.set(timeKey, [])
+      dayMap.get(timeKey)!.push(ev)
     }
-    return map
+
+    return byDay
   }, [events])
 
-  // Build the 7 days of the selected week for display (including empty days)
-  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekOf, i))
-  const daysWithEvents = weekDays.filter((d) => eventsByDay.has(d))
+  const [expandedId, setExpandedId] = useState<string | null>(null)
+
+  // Collapse expanded block on outside click
+  useEffect(() => {
+    if (!expandedId) return
+    function handleOutsideClick() { setExpandedId(null) }
+    document.addEventListener('click', handleOutsideClick)
+    return () => document.removeEventListener('click', handleOutsideClick)
+  }, [expandedId])
+
+  const canGoPrev = weekOf > thisSunday
+  const canGoNext = addDays(weekOf, 7) <= maxWeekOf
+  const todayIso = localDateStr(new Date())
 
   return (
     <div>
@@ -359,19 +440,23 @@ function ScheduleView() {
       <div className="mb-4 flex items-center gap-3">
         <button
           onClick={() => setWeekOf(addDays(weekOf, -7))}
-          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          disabled={!canGoPrev}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           ← Prev
         </button>
-        <span className="text-sm font-medium text-slate-700">{formatWeekRange(weekOf)}</span>
+        <span className="min-w-[160px] text-center text-sm font-medium text-slate-700">
+          {formatWeekRange(weekOf)}
+        </span>
         <button
           onClick={() => setWeekOf(addDays(weekOf, 7))}
-          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          disabled={!canGoNext}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           Next →
         </button>
         <button
-          onClick={() => setWeekOf(getMondayOf(new Date()))}
+          onClick={() => setWeekOf(getSundayOf(new Date()))}
           className="ml-2 rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200"
         >
           This week
@@ -389,7 +474,7 @@ function ScheduleView() {
           Volunteer needed (&gt;6 students, none assigned)
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-3 w-3 rounded-sm bg-white border border-slate-300" />
+          <span className="inline-block h-3 w-3 rounded-sm bg-slate-100 border border-slate-300" />
           No volunteer needed
         </span>
       </div>
@@ -397,87 +482,120 @@ function ScheduleView() {
       {isLoading && <p className="text-slate-500">Loading…</p>}
       {error && <p className="text-red-600">Failed to load schedule. Run a Pike13 sync first.</p>}
 
-      {!isLoading && !error && daysWithEvents.length === 0 && (
-        <div className="rounded-lg border border-slate-200 bg-slate-50 px-6 py-8 text-center">
-          <p className="text-slate-500">No upcoming events found for this week.</p>
-          <p className="mt-1 text-xs text-slate-400">Run a Pike13 sync to populate the schedule.</p>
+      {!isLoading && !error && (
+        <div className="overflow-hidden rounded-lg border border-slate-200 shadow-sm">
+          {/* Day header row */}
+          <div className="grid grid-cols-7 divide-x divide-slate-200 border-b border-slate-200 bg-slate-50">
+            {weekDays.map((day, i) => {
+              const isToday = day === todayIso
+              return (
+                <div key={day} className="px-2 py-2 text-center">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    {DAY_LABELS[i]}
+                  </div>
+                  <div className={`mt-0.5 text-sm font-medium ${isToday ? 'text-blue-600' : 'text-slate-700'}`}>
+                    {new Date(day + 'T00:00:00').toLocaleDateString('en-US', {
+                      month: 'numeric',
+                      day: 'numeric',
+                    })}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Calendar body */}
+          {calendarByDay.size === 0 ? (
+            <div className="bg-white px-6 py-12 text-center">
+              <p className="text-slate-500">No upcoming events found for this week.</p>
+              <p className="mt-1 text-xs text-slate-400">Run a Pike13 sync to populate the schedule.</p>
+            </div>
+          ) : (
+            <div className="grid min-h-[200px] grid-cols-7 divide-x divide-slate-200 bg-white">
+              {weekDays.map((day) => {
+                const dayMap = calendarByDay.get(day)
+                // Sort time slots chronologically
+                const timeSlots = dayMap
+                  ? [...dayMap.entries()].sort((a, b) => a[0].localeCompare(b[0]))
+                  : []
+
+                return (
+                  <div key={day} className="space-y-1.5 p-1.5">
+                    {timeSlots.map(([timeKey, slotEvents]) => {
+                      const instrBlocks = aggregateByInstructor(slotEvents)
+                      const isAnyExpanded = instrBlocks.some((b) => expandedId === b.blockKey)
+                      return (
+                        /* flex-wrap: expanded block claims w-full, others wrap below */
+                        <div key={timeKey} className={instrBlocks.length > 1 ? 'flex flex-wrap gap-1' : ''}>
+                          {instrBlocks.map((block) => {
+                            const hasVolunteer = block.volunteers.length > 0
+                            const needsVolunteer = block.studentCount > 6 && !hasVolunteer
+                            const isExpanded = expandedId === block.blockKey
+
+                            let colorClass = 'border-slate-300 bg-slate-50 text-slate-700'
+                            if (hasVolunteer) colorClass = 'border-green-400 bg-green-50 text-green-900'
+                            else if (needsVolunteer) colorClass = 'border-red-400 bg-red-50 text-red-900'
+
+                            return (
+                              <div
+                                key={block.blockKey}
+                                className={`rounded border ${colorClass} px-1.5 py-1 text-xs leading-snug cursor-pointer select-none transition-all duration-150
+                                  ${isExpanded
+                                    ? 'w-full shadow-md'
+                                    : 'overflow-hidden flex-1 min-w-0'
+                                  }`}
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setExpandedId(isExpanded ? null : block.blockKey)
+                                }}
+                              >
+                                {/* Time — always visible */}
+                                <div className="truncate font-semibold tabular-nums">
+                                  {formatTime(block.startAt)}–{formatTime(block.endAt)}
+                                </div>
+                                {/* Instructor — always visible, truncated when compact */}
+                                <div className="mt-0.5 truncate font-medium">
+                                  {block.instructorName}
+                                </div>
+
+                                {/* Expanded detail */}
+                                {isExpanded && (
+                                  <>
+                                    <div className="mt-1">
+                                      <span
+                                        className={`inline-block rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${
+                                          block.studentCount > 6
+                                            ? 'bg-red-200 text-red-800'
+                                            : block.studentCount > 4
+                                              ? 'bg-yellow-200 text-yellow-800'
+                                              : 'bg-slate-200 text-slate-700'
+                                        }`}
+                                      >
+                                        {block.studentCount} students
+                                      </span>
+                                    </div>
+                                    {block.volunteers.length > 0 ? (
+                                      <div className="mt-0.5 text-[10px] text-green-700">
+                                        TA/VA: {block.volunteers.map((v) => v.name).join(', ')}
+                                      </div>
+                                    ) : (
+                                      <div className="mt-0.5 italic text-[10px] text-slate-400">No TA/VA</div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })}
+            </div>
+          )}
         </div>
       )}
-
-      {daysWithEvents.map((day) => {
-        const dayEvents = eventsByDay.get(day)!
-        return (
-          <div key={day} className="mb-6">
-            <h3 className="mb-2 text-sm font-semibold text-slate-600 uppercase tracking-wide">
-              {formatDayHeading(day)}
-            </h3>
-            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-              <table className="w-full text-sm">
-                <thead className="border-b border-slate-200 bg-slate-50">
-                  <tr>
-                    <th className="px-4 py-2.5 text-left font-medium text-slate-600 whitespace-nowrap">Time</th>
-                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">Instructor(s)</th>
-                    <th className="px-4 py-2.5 text-center font-medium text-slate-600 whitespace-nowrap">Students</th>
-                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">Volunteer(s)</th>
-                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">Status</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {dayEvents.map((ev) => {
-                    const maxStudents = Math.max(...ev.instructors.map((i) => i.studentCount), 0)
-                    const hasVolunteer = ev.volunteers.length > 0
-                    const needsVolunteer = maxStudents > 6 && !hasVolunteer
-
-                    let rowClass = 'hover:brightness-95 transition-colors'
-                    if (hasVolunteer) rowClass += ' bg-green-50'
-                    else if (needsVolunteer) rowClass += ' bg-red-50'
-
-                    return (
-                      <tr key={ev.eventOccurrenceId} className={rowClass}>
-                        <td className="px-4 py-2.5 tabular-nums text-slate-700 whitespace-nowrap">
-                          {formatTime(ev.startAt)}–{formatTime(ev.endAt)}
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-800">
-                          {ev.instructors.map((i) => i.name).join(', ')}
-                        </td>
-                        <td className="px-4 py-2.5 text-center tabular-nums">
-                          <span
-                            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
-                              maxStudents > 6
-                                ? 'bg-red-100 text-red-700'
-                                : maxStudents > 4
-                                  ? 'bg-yellow-100 text-yellow-700'
-                                  : 'bg-slate-100 text-slate-600'
-                            }`}
-                          >
-                            {maxStudents}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-slate-700">
-                          {hasVolunteer
-                            ? ev.volunteers.map((v) => v.name).join(', ')
-                            : <span className="text-slate-400">—</span>}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          {hasVolunteer ? (
-                            <span className="inline-block rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                              Covered
-                            </span>
-                          ) : needsVolunteer ? (
-                            <span className="inline-block rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">
-                              Needed
-                            </span>
-                          ) : null}
-                        </td>
-                      </tr>
-                    )
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )
-      })}
     </div>
   )
 }
@@ -540,7 +658,7 @@ export function VolunteerHoursPage() {
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-800">Volunteer Hours</h1>
+        <h1 className="text-2xl font-bold text-slate-800">Volunteers</h1>
         {view !== 'schedule' && (
           <div className="flex gap-2">
             {view === 'detail' && (

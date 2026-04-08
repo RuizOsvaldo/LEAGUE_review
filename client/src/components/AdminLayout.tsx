@@ -4,7 +4,7 @@ const NAV_LINKS = [
   { href: '/admin', label: 'Dashboard' },
   { href: '/admin/instructors', label: 'Instructors' },
   { href: '/admin/compliance', label: 'Compliance' },
-  { href: '/admin/volunteer-hours', label: 'Volunteer Hours' },
+  { href: '/admin/volunteer-hours', label: 'Volunteers' },
   { href: '/admin/feedback', label: 'Feedback' },
 ]
 
