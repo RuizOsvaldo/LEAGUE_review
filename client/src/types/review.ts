@@ -4,6 +4,7 @@ export interface ReviewDto {
   id: number;
   studentId: number;
   studentName: string;
+  githubUsername: string | null;
   month: string;
   status: ReviewStatus;
   subject: string | null;

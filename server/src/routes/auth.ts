@@ -95,6 +95,12 @@ authRouter.get('/pike13/callback', async (req, res, next) => {
 
     const normalizedEmail = email.toLowerCase();
 
+    if (!normalizedEmail.endsWith('@jointheleague.org')) {
+      const appUrl = (process.env.APP_URL ?? 'http://localhost:5173').replace(/\/$/, '');
+      res.redirect(`${appUrl}/login?error=denied`);
+      return;
+    }
+
     // Find or create a local user record matched by email
     const [existingUser] = await db
       .select()

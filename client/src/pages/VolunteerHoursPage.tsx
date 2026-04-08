@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { VolunteerHourDto, VolunteerSummaryDto } from '../types/admin'
+import type { VolunteerHourDto, VolunteerSummaryDto, ScheduleEventDto } from '../types/admin'
 
 // ---- Helpers ----
 
@@ -289,9 +289,202 @@ function SummaryTable({ rows }: { rows: VolunteerSummaryDto[] }) {
   )
 }
 
+// ---- Schedule view ----
+
+/** Return the ISO date string (YYYY-MM-DD) for Monday of the week containing `d`. */
+function getMondayOf(d: Date): string {
+  const day = d.getDay() // 0=Sun
+  const delta = day === 0 ? -6 : 1 - day
+  const monday = new Date(d)
+  monday.setDate(d.getDate() + delta)
+  return monday.toISOString().slice(0, 10)
+}
+
+function addDays(iso: string, n: number): string {
+  const d = new Date(iso + 'T00:00:00Z')
+  d.setUTCDate(d.getUTCDate() + n)
+  return d.toISOString().slice(0, 10)
+}
+
+function formatWeekRange(monday: string): string {
+  const start = new Date(monday + 'T00:00:00Z')
+  const end = new Date(monday + 'T00:00:00Z')
+  end.setUTCDate(end.getUTCDate() + 6)
+  const fmt = (d: Date) =>
+    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
+  return `${fmt(start)} – ${fmt(end)}`
+}
+
+function formatDayHeading(iso: string): string {
+  const d = new Date(iso + 'T00:00:00Z')
+  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' })
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
+}
+
+async function fetchSchedule(weekOf: string): Promise<ScheduleEventDto[]> {
+  const res = await fetch(`/api/admin/volunteer-schedule?weekOf=${weekOf}`)
+  if (!res.ok) throw new Error('Failed to load schedule')
+  return res.json()
+}
+
+function ScheduleView() {
+  const [weekOf, setWeekOf] = useState(() => getMondayOf(new Date()))
+
+  const { data: events = [], isLoading, error } = useQuery<ScheduleEventDto[]>({
+    queryKey: ['admin', 'volunteer-schedule', weekOf],
+    queryFn: () => fetchSchedule(weekOf),
+  })
+
+  // Group events by local date (YYYY-MM-DD of start)
+  const eventsByDay = useMemo(() => {
+    const map = new Map<string, ScheduleEventDto[]>()
+    for (const ev of events) {
+      const day = new Date(ev.startAt).toISOString().slice(0, 10)
+      if (!map.has(day)) map.set(day, [])
+      map.get(day)!.push(ev)
+    }
+    return map
+  }, [events])
+
+  // Build the 7 days of the selected week for display (including empty days)
+  const weekDays = Array.from({ length: 7 }, (_, i) => addDays(weekOf, i))
+  const daysWithEvents = weekDays.filter((d) => eventsByDay.has(d))
+
+  return (
+    <div>
+      {/* Week navigation */}
+      <div className="mb-4 flex items-center gap-3">
+        <button
+          onClick={() => setWeekOf(addDays(weekOf, -7))}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          ← Prev
+        </button>
+        <span className="text-sm font-medium text-slate-700">{formatWeekRange(weekOf)}</span>
+        <button
+          onClick={() => setWeekOf(addDays(weekOf, 7))}
+          className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+        >
+          Next →
+        </button>
+        <button
+          onClick={() => setWeekOf(getMondayOf(new Date()))}
+          className="ml-2 rounded bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200"
+        >
+          This week
+        </button>
+      </div>
+
+      {/* Legend */}
+      <div className="mb-4 flex flex-wrap gap-3 text-xs">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-3 w-3 rounded-sm bg-green-200 border border-green-400" />
+          Volunteer assigned
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-3 w-3 rounded-sm bg-red-200 border border-red-400" />
+          Volunteer needed (&gt;6 students, none assigned)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-3 w-3 rounded-sm bg-white border border-slate-300" />
+          No volunteer needed
+        </span>
+      </div>
+
+      {isLoading && <p className="text-slate-500">Loading…</p>}
+      {error && <p className="text-red-600">Failed to load schedule. Run a Pike13 sync first.</p>}
+
+      {!isLoading && !error && daysWithEvents.length === 0 && (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-6 py-8 text-center">
+          <p className="text-slate-500">No upcoming events found for this week.</p>
+          <p className="mt-1 text-xs text-slate-400">Run a Pike13 sync to populate the schedule.</p>
+        </div>
+      )}
+
+      {daysWithEvents.map((day) => {
+        const dayEvents = eventsByDay.get(day)!
+        return (
+          <div key={day} className="mb-6">
+            <h3 className="mb-2 text-sm font-semibold text-slate-600 uppercase tracking-wide">
+              {formatDayHeading(day)}
+            </h3>
+            <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+              <table className="w-full text-sm">
+                <thead className="border-b border-slate-200 bg-slate-50">
+                  <tr>
+                    <th className="px-4 py-2.5 text-left font-medium text-slate-600 whitespace-nowrap">Time</th>
+                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">Instructor(s)</th>
+                    <th className="px-4 py-2.5 text-center font-medium text-slate-600 whitespace-nowrap">Students</th>
+                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">Volunteer(s)</th>
+                    <th className="px-4 py-2.5 text-left font-medium text-slate-600">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {dayEvents.map((ev) => {
+                    const maxStudents = Math.max(...ev.instructors.map((i) => i.studentCount), 0)
+                    const hasVolunteer = ev.volunteers.length > 0
+                    const needsVolunteer = maxStudents > 6 && !hasVolunteer
+
+                    let rowClass = 'hover:brightness-95 transition-colors'
+                    if (hasVolunteer) rowClass += ' bg-green-50'
+                    else if (needsVolunteer) rowClass += ' bg-red-50'
+
+                    return (
+                      <tr key={ev.eventOccurrenceId} className={rowClass}>
+                        <td className="px-4 py-2.5 tabular-nums text-slate-700 whitespace-nowrap">
+                          {formatTime(ev.startAt)}–{formatTime(ev.endAt)}
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-800">
+                          {ev.instructors.map((i) => i.name).join(', ')}
+                        </td>
+                        <td className="px-4 py-2.5 text-center tabular-nums">
+                          <span
+                            className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
+                              maxStudents > 6
+                                ? 'bg-red-100 text-red-700'
+                                : maxStudents > 4
+                                  ? 'bg-yellow-100 text-yellow-700'
+                                  : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            {maxStudents}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5 text-slate-700">
+                          {hasVolunteer
+                            ? ev.volunteers.map((v) => v.name).join(', ')
+                            : <span className="text-slate-400">—</span>}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          {hasVolunteer ? (
+                            <span className="inline-block rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                              Covered
+                            </span>
+                          ) : needsVolunteer ? (
+                            <span className="inline-block rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">
+                              Needed
+                            </span>
+                          ) : null}
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ---- Main page ----
 
-type View = 'summary' | 'detail'
+type View = 'summary' | 'detail' | 'schedule'
 
 export function VolunteerHoursPage() {
   const queryClient = useQueryClient()
@@ -348,22 +541,24 @@ export function VolunteerHoursPage() {
     <div>
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-800">Volunteer Hours</h1>
-        <div className="flex gap-2">
-          {view === 'detail' && (
+        {view !== 'schedule' && (
+          <div className="flex gap-2">
+            {view === 'detail' && (
+              <button
+                onClick={() => exportToCsv(entries, 'volunteer-hours.csv')}
+                className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              >
+                Export CSV
+              </button>
+            )}
             <button
-              onClick={() => exportToCsv(entries, 'volunteer-hours.csv')}
-              className="rounded border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              onClick={() => { setShowAddForm(true); setEditingId(null) }}
+              className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
             >
-              Export CSV
+              Add Entry
             </button>
-          )}
-          <button
-            onClick={() => { setShowAddForm(true); setEditingId(null) }}
-            className="rounded bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-          >
-            Add Entry
-          </button>
-        </div>
+          </div>
+        )}
       </div>
 
       {/* View toggle */}
@@ -387,6 +582,16 @@ export function VolunteerHoursPage() {
           }`}
         >
           Detail
+        </button>
+        <button
+          onClick={() => setView('schedule')}
+          className={`rounded px-4 py-1.5 text-sm font-medium transition-colors ${
+            view === 'schedule'
+              ? 'bg-white text-slate-800 shadow-sm'
+              : 'text-slate-500 hover:text-slate-700'
+          }`}
+        >
+          Schedule
         </button>
       </div>
 
@@ -414,6 +619,9 @@ export function VolunteerHoursPage() {
           {!summaryLoading && <SummaryTable rows={summary} />}
         </>
       )}
+
+      {/* Schedule view */}
+      {view === 'schedule' && <ScheduleView />}
 
       {/* Detail view */}
       {view === 'detail' && (

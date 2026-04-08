@@ -72,7 +72,7 @@ feedbackRouter.post('/feedback/:token', async (req, res, next) => {
       return;
     }
 
-    const { rating, comment } = req.body as { rating?: unknown; comment?: unknown };
+    const { rating, comment, suggestion } = req.body as { rating?: unknown; comment?: unknown; suggestion?: unknown };
 
     if (
       rating === undefined ||
@@ -101,6 +101,7 @@ feedbackRouter.post('/feedback/:token', async (req, res, next) => {
         reviewId: row.reviewId,
         rating: rating as number,
         comment: typeof comment === 'string' ? comment : null,
+        suggestion: typeof suggestion === 'string' && suggestion.trim() ? suggestion.trim() : null,
       })
       .returning();
 

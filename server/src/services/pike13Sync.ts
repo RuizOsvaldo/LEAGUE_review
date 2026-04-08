@@ -1,4 +1,4 @@
-import { eq, sql, and } from 'drizzle-orm';
+import { eq, sql, and, count, gte, lt } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import * as schema from '../db/schema';
 
@@ -236,6 +236,67 @@ export async function runSync(
     }
   }
 
+  // 6b. Build instructor student count map for the event schedule
+  const instructorStudentCounts = await db
+    .select({
+      instructorId: schema.instructorStudents.instructorId,
+      cnt: count(schema.instructorStudents.studentId),
+    })
+    .from(schema.instructorStudents)
+    .groupBy(schema.instructorStudents.instructorId);
+
+  const instructorStudentCountMap = new Map(
+    instructorStudentCounts.map((r) => [r.instructorId, Number(r.cnt)]),
+  );
+
+  // 6c. Upsert upcoming event schedule data
+  for (const occ of upcomingEvents) {
+    const instrList: Array<{ pike13Id: number; name: string; instructorId: number | null; studentCount: number }> = [];
+    const volList: Array<{ pike13Id: number; name: string }> = [];
+
+    for (const staff of occ.staff_members ?? []) {
+      const instructorId = pike13StaffIdToInstructorId.get(staff.id) ?? null;
+      if (instructorId !== null) {
+        instrList.push({
+          pike13Id: staff.id,
+          name: staff.name,
+          instructorId,
+          studentCount: instructorStudentCountMap.get(instructorId) ?? 0,
+        });
+      } else {
+        volList.push({ pike13Id: staff.id, name: staff.name });
+      }
+    }
+
+    if (instrList.length === 0) continue;
+
+    await db
+      .insert(schema.volunteerEventSchedule)
+      .values({
+        eventOccurrenceId: String(occ.id),
+        startAt: new Date(occ.start_at),
+        endAt: new Date(occ.end_at),
+        instructors: instrList,
+        volunteers: volList,
+      })
+      .onConflictDoUpdate({
+        target: schema.volunteerEventSchedule.eventOccurrenceId,
+        set: {
+          startAt: new Date(occ.start_at),
+          endAt: new Date(occ.end_at),
+          instructors: instrList,
+          volunteers: volList,
+          updatedAt: new Date(),
+        },
+      });
+  }
+
+  // Also delete stale events (past events no longer in upcoming window)
+  await db.execute(sql`
+    DELETE FROM volunteer_event_schedule
+    WHERE start_at < now()
+  `);
+
   // 7. Volunteer hours from YTD events (any non-instructor staff member).
   //    A volunteer can be listed on two simultaneous events — only count once per time slot.
 
@@ -368,13 +429,25 @@ export async function runSync(
         studentsUpserted++;
       }
 
+      const occStart = new Date(occ.start_at);
+      const occurrenceId = String(occ.id);
+
       for (const instructorId of instructorIds) {
         const inserted = await db
           .insert(schema.instructorStudents)
-          .values({ instructorId, studentId })
-          .onConflictDoNothing()
+          .values({ instructorId, studentId, lastSeenAt: occStart })
+          .onConflictDoUpdate({
+            target: [schema.instructorStudents.instructorId, schema.instructorStudents.studentId],
+            set: { lastSeenAt: occStart },
+          })
           .returning({ instructorId: schema.instructorStudents.instructorId });
         assignmentsCreated += inserted.length;
+
+        // Record individual attendance session
+        await db
+          .insert(schema.studentAttendance)
+          .values({ studentId, instructorId, attendedAt: occStart, eventOccurrenceId: occurrenceId })
+          .onConflictDoNothing();
       }
     }
   }

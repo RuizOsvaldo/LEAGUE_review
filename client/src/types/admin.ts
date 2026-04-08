@@ -33,6 +33,7 @@ export interface AdminFeedbackDto {
   month: string
   rating: number
   comment: string | null
+  suggestion: string | null
   submittedAt: string
 }
 
@@ -50,4 +51,24 @@ export interface VolunteerSummaryDto {
   volunteerName: string
   totalHours: number
   isScheduled: boolean
+}
+
+export interface ScheduleInstructor {
+  pike13Id: number
+  name: string
+  instructorId: number | null
+  studentCount: number
+}
+
+export interface ScheduleVolunteer {
+  pike13Id: number
+  name: string
+}
+
+export interface ScheduleEventDto {
+  eventOccurrenceId: string
+  startAt: string
+  endAt: string
+  instructors: ScheduleInstructor[]
+  volunteers: ScheduleVolunteer[]
 }

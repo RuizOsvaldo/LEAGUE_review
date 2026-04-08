@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { eq, and, count, sql, desc, notLike, inArray } from 'drizzle-orm';
+import { eq, and, count, avg, sql, desc, notLike, inArray, gte, lt } from 'drizzle-orm';
 import { db } from '../db';
 import {
   instructors,
@@ -11,6 +11,7 @@ import {
   adminNotifications,
   serviceFeedback,
   pike13AdminToken,
+  volunteerEventSchedule,
 } from '../db/schema';
 import { isAdmin } from '../middleware/auth';
 import { runSync } from '../services/pike13Sync';
@@ -311,6 +312,7 @@ adminRouter.get('/admin/feedback', async (_req, res, next) => {
         month: monthlyReviews.month,
         rating: serviceFeedback.rating,
         comment: serviceFeedback.comment,
+        suggestion: serviceFeedback.suggestion,
         submittedAt: serviceFeedback.submittedAt,
       })
       .from(serviceFeedback)
@@ -346,6 +348,124 @@ adminRouter.patch('/admin/notifications/:id/read', async (req, res, next) => {
     }
 
     res.json(updated);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Analytics route ----------
+
+// GET /api/admin/analytics?month=YYYY-MM
+adminRouter.get('/admin/analytics', async (req, res, next) => {
+  try {
+    const monthParam = req.query.month as string | undefined;
+    const month =
+      monthParam && /^\d{4}-\d{2}$/.test(monthParam)
+        ? monthParam
+        : new Date().toISOString().slice(0, 7);
+
+    // Total students assigned across all instructors
+    const [totalStudentsRow] = await db
+      .select({ count: count() })
+      .from(instructorStudents);
+    const totalStudents = Number(totalStudentsRow?.count ?? 0);
+
+    // Sent reviews this month (across all instructors)
+    const [sentRow] = await db
+      .select({ count: count() })
+      .from(monthlyReviews)
+      .where(and(eq(monthlyReviews.month, month), eq(monthlyReviews.status, 'sent')));
+    const totalSent = Number(sentRow?.count ?? 0);
+
+    // "Still need to send" = every student who hasn't received a sent review this month
+    const needToSend = Math.max(0, totalStudents - totalSent);
+
+    // Feedback stats (all-time)
+    const [feedbackStats] = await db
+      .select({
+        totalFeedback: count(),
+        avgRating: avg(serviceFeedback.rating),
+      })
+      .from(serviceFeedback);
+
+    // Feedback count for this month's sent reviews
+    const monthFeedback = await db
+      .select({ count: count() })
+      .from(serviceFeedback)
+      .innerJoin(monthlyReviews, eq(serviceFeedback.reviewId, monthlyReviews.id))
+      .where(eq(monthlyReviews.month, month));
+
+    const monthFeedbackCount = Number(monthFeedback[0]?.count ?? 0);
+    const feedbackRate = totalSent > 0 ? Math.round((monthFeedbackCount / totalSent) * 100) : 0;
+
+    // Top suggestions (all-time)
+    const suggestionRows = await db
+      .select({
+        suggestion: serviceFeedback.suggestion,
+        count: count(),
+      })
+      .from(serviceFeedback)
+      .where(sql`${serviceFeedback.suggestion} IS NOT NULL`)
+      .groupBy(serviceFeedback.suggestion)
+      .orderBy(desc(count()))
+      .limit(5);
+
+    res.json({
+      month,
+      totalSent,
+      needToSend,
+      totalFeedback: Number(feedbackStats?.totalFeedback ?? 0),
+      monthFeedbackCount,
+      feedbackRate,
+      avgRating: feedbackStats?.avgRating ? parseFloat(Number(feedbackStats.avgRating).toFixed(1)) : null,
+      topSuggestions: suggestionRows.map((r) => ({ suggestion: r.suggestion, count: Number(r.count) })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---------- Volunteer schedule route ----------
+
+// GET /api/admin/volunteer-schedule?weekOf=YYYY-MM-DD
+adminRouter.get('/admin/volunteer-schedule', async (req, res, next) => {
+  try {
+    const weekOfParam = req.query.weekOf as string | undefined;
+
+    let weekStart: Date;
+    if (weekOfParam && /^\d{4}-\d{2}-\d{2}$/.test(weekOfParam)) {
+      weekStart = new Date(weekOfParam + 'T00:00:00.000Z');
+    } else {
+      weekStart = new Date();
+      const day = weekStart.getUTCDay();
+      const daysToMonday = day === 0 ? -6 : 1 - day;
+      weekStart.setUTCDate(weekStart.getUTCDate() + daysToMonday);
+      weekStart.setUTCHours(0, 0, 0, 0);
+    }
+
+    const weekEnd = new Date(weekStart);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 7);
+
+    const events = await db
+      .select()
+      .from(volunteerEventSchedule)
+      .where(
+        and(
+          gte(volunteerEventSchedule.startAt, weekStart),
+          lt(volunteerEventSchedule.startAt, weekEnd),
+        ),
+      )
+      .orderBy(volunteerEventSchedule.startAt);
+
+    res.json(
+      events.map((e) => ({
+        eventOccurrenceId: e.eventOccurrenceId,
+        startAt: e.startAt.toISOString(),
+        endAt: e.endAt.toISOString(),
+        instructors: e.instructors,
+        volunteers: e.volunteers,
+      })),
+    );
   } catch (err) {
     next(err);
   }

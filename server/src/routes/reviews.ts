@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gte, lt } from 'drizzle-orm';
+import Groq from 'groq-sdk';
 import { db } from '../db';
-import { monthlyReviews, students } from '../db/schema';
+import { monthlyReviews, students, instructors, users, studentAttendance } from '../db/schema';
 import { isActiveInstructor } from '../middleware/auth';
-import { sendReviewEmail } from '../services/email';
+import { sendReviewEmail, sendTestReviewEmail } from '../services/email';
 
 export const reviewsRouter = Router();
 
@@ -12,11 +13,13 @@ reviewsRouter.use(isActiveInstructor);
 function formatReview(
   review: typeof monthlyReviews.$inferSelect,
   studentName: string,
+  githubUsername: string | null = null,
 ) {
   return {
     id: review.id,
     studentId: review.studentId,
     studentName,
+    githubUsername,
     month: review.month,
     status: review.status,
     subject: review.subject,
@@ -41,6 +44,7 @@ reviewsRouter.get('/reviews', async (req, res, next) => {
       .select({
         review: monthlyReviews,
         studentName: students.name,
+        githubUsername: students.githubUsername,
       })
       .from(monthlyReviews)
       .innerJoin(students, eq(monthlyReviews.studentId, students.id))
@@ -48,7 +52,7 @@ reviewsRouter.get('/reviews', async (req, res, next) => {
         and(eq(monthlyReviews.instructorId, instructorId), eq(monthlyReviews.month, month)),
       );
 
-    res.json(rows.map((r) => formatReview(r.review, r.studentName)));
+    res.json(rows.map((r) => formatReview(r.review, r.studentName, r.githubUsername)));
   } catch (err) {
     next(err);
   }
@@ -110,7 +114,7 @@ reviewsRouter.get('/reviews/:id', async (req, res, next) => {
     const id = parseInt(req.params.id, 10);
 
     const [row] = await db
-      .select({ review: monthlyReviews, studentName: students.name })
+      .select({ review: monthlyReviews, studentName: students.name, githubUsername: students.githubUsername })
       .from(monthlyReviews)
       .innerJoin(students, eq(monthlyReviews.studentId, students.id))
       .where(and(eq(monthlyReviews.id, id), eq(monthlyReviews.instructorId, instructorId)));
@@ -120,7 +124,7 @@ reviewsRouter.get('/reviews/:id', async (req, res, next) => {
       return;
     }
 
-    res.json(formatReview(row.review, row.studentName));
+    res.json(formatReview(row.review, row.studentName, row.githubUsername));
   } catch (err) {
     next(err);
   }
@@ -209,6 +213,414 @@ reviewsRouter.post('/reviews/:id/send', async (req, res, next) => {
     }
 
     res.json(formatReview(updated, existing.studentName));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/reviews/:id/send-test — send a preview to any email without marking as sent
+reviewsRouter.post('/reviews/:id/send-test', async (req, res, next) => {
+  try {
+    const instructorId = req.session.user!.instructorId!;
+    const id = parseInt(req.params.id, 10);
+    const { testEmail } = req.body as { testEmail?: string };
+
+    if (!testEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(testEmail)) {
+      res.status(400).json({ error: 'A valid testEmail is required' });
+      return;
+    }
+
+    const [existing] = await db
+      .select({ review: monthlyReviews, studentName: students.name })
+      .from(monthlyReviews)
+      .innerJoin(students, eq(monthlyReviews.studentId, students.id))
+      .where(and(eq(monthlyReviews.id, id), eq(monthlyReviews.instructorId, instructorId)));
+
+    if (!existing) {
+      res.status(404).json({ error: 'Review not found' });
+      return;
+    }
+
+    await sendTestReviewEmail({
+      toEmail: testEmail,
+      studentName: existing.studentName,
+      month: existing.review.month,
+      reviewBody: existing.review.body ?? '',
+      feedbackToken: existing.review.feedbackToken,
+    });
+
+    res.json({ ok: true, sentTo: testEmail });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// POST /api/reviews/:id/generate-github-draft
+// Fetches the student's GitHub push events for the review month and uses
+// Claude to write a draft review body.
+reviewsRouter.post('/reviews/:id/generate-github-draft', async (req, res, next) => {
+  try {
+    const instructorId = req.session.user!.instructorId!;
+    const id = parseInt(req.params.id, 10);
+
+    const [row] = await db
+      .select({
+        review: monthlyReviews,
+        studentName: students.name,
+        githubUsername: students.githubUsername,
+        guardianName: students.guardianName,
+        instructorName: users.name,
+        instructorEmail: users.email,
+      })
+      .from(monthlyReviews)
+      .innerJoin(students, eq(monthlyReviews.studentId, students.id))
+      .innerJoin(instructors, eq(monthlyReviews.instructorId, instructors.id))
+      .innerJoin(users, eq(instructors.userId, users.id))
+      .where(and(eq(monthlyReviews.id, id), eq(monthlyReviews.instructorId, instructorId)));
+
+    if (!row) {
+      res.status(404).json({ error: 'Review not found' });
+      return;
+    }
+
+    if (!row.githubUsername) {
+      res.status(400).json({ error: 'This student has no GitHub username linked in Pike13' });
+      return;
+    }
+
+    const { githubUsername, studentName, guardianName, instructorName, instructorEmail, review } = row;
+    const month = review.month; // YYYY-MM
+    const reviewMonthYear = month.split('-');
+    const reviewYear = parseInt(reviewMonthYear[0], 10);
+    const reviewMon = parseInt(reviewMonthYear[1], 10);
+    const monthLabel = new Date(Date.UTC(reviewYear, reviewMon - 1, 15)).toLocaleString('en-US', {
+      month: 'long', year: 'numeric', timeZone: 'UTC',
+    });
+
+    // Search the past 30 days so recent activity is never missed
+    const now = new Date();
+    const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Fetch GitHub events (public, rate-limited to 60/hr without token)
+    const ghHeaders: Record<string, string> = {
+      Accept: 'application/vnd.github.v3+json',
+      'User-Agent': 'LEAGUE-Review-App',
+    };
+    if (process.env.GITHUB_TOKEN) {
+      ghHeaders['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+    }
+
+    const ghRes = await fetch(
+      `https://api.github.com/users/${encodeURIComponent(githubUsername)}/events?per_page=100`,
+      { headers: ghHeaders },
+    );
+
+    if (ghRes.status === 404) {
+      res.status(400).json({ error: `GitHub user "${githubUsername}" not found` });
+      return;
+    }
+    if (!ghRes.ok) {
+      res.status(502).json({ error: `GitHub API returned ${ghRes.status}` });
+      return;
+    }
+
+    interface GithubEvent {
+      type: string;
+      created_at: string;
+      repo: { name: string };
+      payload: {
+        ref?: string;
+        commits?: Array<{ sha: string; message: string }>;
+      };
+    }
+
+    const events = (await ghRes.json()) as GithubEvent[];
+
+    // Filter to PushEvents within the past 30 days
+    const pushEvents = events.filter((e) => {
+      if (e.type !== 'PushEvent') return false;
+      const d = new Date(e.created_at);
+      return d >= since && d <= now;
+    });
+
+    if (pushEvents.length === 0) {
+      res.status(400).json({
+        error: `No GitHub push activity found for @${githubUsername} in the past 30 days`,
+      });
+      return;
+    }
+
+    // Collect commit messages from push events (always available, even for private repos)
+    // and track unique repos + SHAs for detail enrichment attempts
+    interface EnrichedCommit {
+      sha: string;
+      message: string;
+      filesChanged: string[];
+      additions: number;
+      deletions: number;
+    }
+
+    interface RepoData {
+      shortName: string;
+      commits: EnrichedCommit[];
+    }
+
+    const repoData = new Map<string, RepoData>();
+
+    // Seed with commit messages from push event payloads (baseline — always works)
+    for (const event of pushEvents) {
+      const fullRepo = event.repo.name;
+      const shortName = fullRepo.split('/').pop() ?? fullRepo;
+      if (!repoData.has(fullRepo)) repoData.set(fullRepo, { shortName, commits: [] });
+      const entry = repoData.get(fullRepo)!;
+
+      for (const c of event.payload.commits ?? []) {
+        const msg = (c.message ?? '').split('\n')[0].trim();
+        if (!msg || msg.toLowerCase().startsWith('merge ')) continue;
+        const sha = (c.sha ?? '').slice(0, 7);
+        // Deduplicate by message
+        if (!entry.commits.find((x) => x.message === msg)) {
+          entry.commits.push({ sha, message: msg, filesChanged: [], additions: 0, deletions: 0 });
+        }
+      }
+    }
+
+    // Try to enrich each repo's commits with file details via the commits list API.
+    // This works for public repos and private repos where GITHUB_TOKEN has access.
+    // Failures are silently ignored — we always have the baseline commit messages.
+    for (const [fullRepo, entry] of repoData) {
+      try {
+        const listRes = await fetch(
+          `https://api.github.com/repos/${fullRepo}/commits?author=${encodeURIComponent(githubUsername)}&since=${since.toISOString()}&until=${now.toISOString()}&per_page=30`,
+          { headers: ghHeaders },
+        );
+        if (!listRes.ok) continue;
+
+        const list = await listRes.json() as Array<{ sha: string; commit: { message: string } }>;
+
+        // Fetch details for up to 5 commits per repo
+        for (const c of list.slice(0, 5)) {
+          const msg = c.commit.message.split('\n')[0].trim();
+          if (!msg || msg.toLowerCase().startsWith('merge ')) continue;
+
+          try {
+            const detailRes = await fetch(
+              `https://api.github.com/repos/${fullRepo}/commits/${c.sha}`,
+              { headers: ghHeaders },
+            );
+            if (!detailRes.ok) continue;
+
+            const detail = await detailRes.json() as {
+              stats?: { additions: number; deletions: number };
+              files?: Array<{ filename: string }>;
+            };
+
+            // Update or insert enriched commit
+            const existing = entry.commits.find((x) => x.message === msg);
+            const enriched: EnrichedCommit = {
+              sha: c.sha.slice(0, 7),
+              message: msg,
+              filesChanged: (detail.files ?? []).map((f) => f.filename),
+              additions: detail.stats?.additions ?? 0,
+              deletions: detail.stats?.deletions ?? 0,
+            };
+            if (existing) {
+              Object.assign(existing, enriched);
+            } else if (entry.commits.length < 15) {
+              entry.commits.push(enriched);
+            }
+          } catch { /* skip */ }
+        }
+      } catch { /* skip */ }
+    }
+
+    // Drop repos where we ended up with no commits at all
+    for (const [key, entry] of repoData) {
+      if (entry.commits.length === 0) repoData.delete(key);
+    }
+
+    // Fetch attendance dates for this student+instructor in the review month
+    const monthStart = new Date(reviewYear, reviewMon - 1, 1);
+    const monthEnd = new Date(reviewYear, reviewMon, 1);
+
+    const attendanceRows = await db
+      .select({ attendedAt: studentAttendance.attendedAt })
+      .from(studentAttendance)
+      .where(
+        and(
+          eq(studentAttendance.studentId, review.studentId),
+          eq(studentAttendance.instructorId, instructorId),
+          gte(studentAttendance.attendedAt, monthStart),
+          lt(studentAttendance.attendedAt, monthEnd),
+        ),
+      )
+      .orderBy(studentAttendance.attendedAt);
+
+    const attendanceDates = attendanceRows.map((r) =>
+      r.attendedAt.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }),
+    );
+
+    // Files that indicate container/environment issues rather than curriculum work
+    const INFRA_FILE_PATTERNS = /^(dockerfile|docker-compose|\.dockerignore|requirements\.txt|pom\.xml|build\.gradle|\.gitignore|\.env|readme\.md|\.github|__pycache__|\.classpath|\.project|\.settings)/i;
+
+    // Detect if a file path is inside a lessons directory
+    function isLessonFile(filePath: string): boolean {
+      return /(?:^|\/)lessons?\//i.test(filePath);
+    }
+
+    // Extract lesson number from a path like lessons/03_loops/main.py → 3
+    function lessonNumber(filePath: string): number | null {
+      const m = filePath.match(/lessons?\/([\d]+)/i);
+      return m ? parseInt(m[1], 10) : null;
+    }
+
+    // Build curriculum-focused commit summary
+    // Only include files inside lessons/ directories; ignore infra files
+    let highestLesson = 0;
+    const lessonsSeen = new Set<number>();
+    let totalCommits = 0;
+
+    const commitSummary = [...repoData.entries()]
+      .slice(0, 3)
+      .map(([, { shortName, commits }]) => {
+        const commitLines: string[] = [];
+
+        for (const c of commits.slice(0, 8)) {
+          totalCommits++;
+          const lessonFiles = c.filesChanged.filter(
+            (f) => isLessonFile(f) && !INFRA_FILE_PATTERNS.test(f.split('/').pop() ?? f),
+          );
+
+          // Track lesson progression
+          for (const f of lessonFiles) {
+            const n = lessonNumber(f);
+            if (n !== null) {
+              lessonsSeen.add(n);
+              if (n > highestLesson) highestLesson = n;
+            }
+          }
+
+          // Skip commits with no lesson-directory changes
+          if (lessonFiles.length === 0) continue;
+
+          // Show the lesson folder path (e.g. lessons/03_loops) rather than just filename
+          const fileSummary = lessonFiles
+            .slice(0, 4)
+            .map((f) => {
+              // Show up to the lesson subfolder + filename: lessons/03_loops/main.py
+              const parts = f.split('/');
+              const lessonIdx = parts.findIndex((p) => /^lessons?$/i.test(p));
+              return lessonIdx >= 0
+                ? parts.slice(lessonIdx, lessonIdx + 3).join('/')
+                : parts.slice(-2).join('/');
+            })
+            .filter((v, i, a) => a.indexOf(v) === i) // deduplicate
+            .join(', ');
+
+          const statPart = (c.additions || c.deletions) ? ` +${c.additions}/-${c.deletions}` : '';
+          commitLines.push(`  - ${c.message} [${fileSummary}]${statPart}`);
+        }
+
+        if (commitLines.length === 0) return null;
+        return `Repository: ${shortName}\n${commitLines.join('\n')}`;
+      })
+      .filter(Boolean)
+      .join('\n\n');
+
+    // Summary of lesson progress for the prompt
+    const lessonProgressNote = highestLesson > 0
+      ? `Current curriculum position: reached lesson ${highestLesson}${lessonsSeen.size > 1 ? ` (worked across lessons ${[...lessonsSeen].sort((a, b) => a - b).join(', ')})` : ''}.`
+      : '';
+
+    if (!commitSummary) {
+      res.status(400).json({
+        error: `No curriculum (lessons/) activity found for @${githubUsername} in the past 30 days. Only infrastructure or non-lesson changes were detected.`,
+      });
+      return;
+    }
+
+    if (!process.env.GROQ_API_KEY) {
+      res.status(500).json({ error: 'GROQ_API_KEY is not configured on the server' });
+      return;
+    }
+
+    const client = new Groq({ apiKey: process.env.GROQ_API_KEY });
+
+    const completion = await client.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      max_tokens: 1024,
+      messages: [
+        {
+          role: 'system',
+          content: `You are an encouraging coding instructor writing a monthly progress review for a parent/guardian.
+
+Tone rules:
+- Warm, positive, and encouraging throughout — frame slow progress as steady, consistent growth
+- Highlight the positives first and foremost
+- Focus on the highest-numbered (most advanced) lessons the student worked on — these show where they are in the curriculum now
+- Only briefly mention lower-numbered lessons if they're directly relevant to understanding the advanced work
+- Do NOT make high-achieving students feel they need to do more — keep any suggestions light and optional-sounding
+- Base everything ONLY on the commit data and file paths provided; never invent details
+
+Structure (no headers, flowing paragraphs):
+1. Progress paragraph — what they worked on, what lesson they've reached, what concepts those lessons cover
+2. Effort & highlights paragraph — specific things done well, how the work builds their skills
+3. Instructor notes (2–4 sentences only) — one gentle suggestion for the student if helpful, then a brief plan for how the instructor will support them next (e.g. "In our next sessions we'll build on X by introducing Y"). Keep this encouraging, never prescriptive.`,
+        },
+        {
+          role: 'user',
+          content: `Write a monthly progress review for ${studentName} (${monthLabel}) to send to their parent/guardian.
+${attendanceDates.length > 0 ? `\nClass attendance this month: ${attendanceDates.join(', ')} (${attendanceDates.length} session${attendanceDates.length === 1 ? '' : 's'})` : ''}
+${lessonProgressNote ? `\n${lessonProgressNote}` : ''}
+
+Curriculum activity (lessons/ directory, past 30 days):
+${commitSummary}
+
+Instructions:
+- Open with attendance and their current lesson position
+- Lead with the most advanced lesson work, not the earliest
+- Keep any improvement suggestion light — one sentence max, framed as "something to explore" not a gap
+- End with 2–3 sentences from the instructor on what they'll work on together next
+- No greeting, no sign-off, 3 paragraphs`,
+        },
+      ],
+    });
+
+    const llmBody = (completion.choices[0]?.message?.content ?? '').trim();
+
+    // Greeting
+    const greeting = guardianName
+      ? `Dear ${guardianName},`
+      : 'Dear LEAGUE Family,';
+
+    // Attendance section
+    const attendanceSection = attendanceDates.length > 0
+      ? `Class sessions attended (${monthLabel}):\n${attendanceDates.map((d) => `• ${d}`).join('\n')}`
+      : '';
+
+    // GitHub links section
+    const repoLinks = [...repoData.entries()]
+      .map(([fullRepo, { shortName }]) =>
+        `• <a href="https://github.com/${fullRepo}" style="color:#f37121;text-decoration:none;">${shortName}</a> — github.com/${fullRepo}`,
+      )
+      .join('\n');
+
+    const githubSection = `GitHub activity this past month (last 30 days):\n${repoLinks}`;
+
+    // Sign-off
+    const signOff = `Warm regards,\n${instructorName}\n${instructorEmail}`;
+
+    const parts = [greeting, '', llmBody];
+    if (attendanceSection) parts.push('', attendanceSection);
+    parts.push('', githubSection, '', signOff);
+
+    const generatedBody = parts.join('\n');
+
+    res.json({
+      body: generatedBody,
+      commitCount: totalCommits,
+      repoCount: repoData.size,
+    });
   } catch (err) {
     next(err);
   }

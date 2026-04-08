@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearch } from 'wouter'
 import { MonthPicker } from '../components/MonthPicker'
 import type { PendingCheckinResponse } from '../types/checkin'
@@ -60,10 +60,37 @@ export function DashboardPage() {
   const search = useSearch()
   const params = new URLSearchParams(search)
   const month = params.get('month') ?? getCurrentMonth()
+  const queryClient = useQueryClient()
 
   const [checkinDismissed, setCheckinDismissed] = useState(false)
   const [studentSortKey, setStudentSortKey] = useState<'name' | 'githubUsername'>('name')
   const [studentSortDir, setStudentSortDir] = useState<'asc' | 'desc'>('asc')
+  const [syncing, setSyncing] = useState(false)
+  const [syncMsg, setSyncMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+  async function handleSync() {
+    setSyncing(true)
+    setSyncMsg(null)
+    try {
+      const res = await fetch('/api/instructor/sync/pike13', { method: 'POST' })
+      if (res.ok) {
+        const data = await res.json()
+        setSyncMsg({ ok: true, text: `Sync complete — ${data.studentsUpserted ?? 0} students, ${data.assignmentsCreated ?? 0} assignments updated.` })
+        // Refresh all instructor data across pages
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        queryClient.invalidateQueries({ queryKey: ['instructor'] })
+        queryClient.invalidateQueries({ queryKey: ['instructor-students'] })
+        queryClient.invalidateQueries({ queryKey: ['reviews'] })
+      } else {
+        const err = await res.json().catch(() => ({ error: 'Sync failed' }))
+        setSyncMsg({ ok: false, text: err.error ?? 'Sync failed' })
+      }
+    } catch {
+      setSyncMsg({ ok: false, text: 'Network error during sync' })
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const { data, isLoading, error } = useQuery<DashboardData>({
     queryKey: ['dashboard', month],
@@ -101,10 +128,24 @@ export function DashboardPage() {
 
   return (
     <div className="p-8 max-w-4xl">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-2">
         <h1 className="text-2xl font-bold text-slate-800">Dashboard</h1>
-        <MonthPicker />
+        <div className="flex items-center gap-3">
+          <MonthPicker />
+          <button
+            onClick={handleSync}
+            disabled={syncing}
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {syncing ? 'Syncing…' : 'Sync Pike13'}
+          </button>
+        </div>
       </div>
+      {syncMsg && (
+        <p className={`mb-4 rounded-lg px-3 py-2 text-sm ${syncMsg.ok ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-red-50 text-red-700 border border-red-200'}`}>
+          {syncMsg.text}
+        </p>
+      )}
 
       {showCheckinBanner && (
         <div className="mb-6 flex items-center justify-between rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

@@ -1,6 +1,24 @@
+import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { MonthPicker } from '../components/MonthPicker'
+import { useSearch } from 'wouter'
 import type { AdminNotificationDto } from '../types/admin'
 import type { Pike13StatusDto, Pike13SyncResultDto } from '../types/pike13'
+
+interface AnalyticsDto {
+  month: string
+  totalSent: number
+  needToSend: number
+  totalFeedback: number
+  monthFeedbackCount: number
+  feedbackRate: number
+  avgRating: number | null
+  topSuggestions: Array<{ suggestion: string | null; count: number }>
+}
+
+function getCurrentMonth(): string {
+  return new Date().toISOString().slice(0, 7)
+}
 
 async function fetchNotifications(unreadOnly = false): Promise<AdminNotificationDto[]> {
   const url = unreadOnly
@@ -31,8 +49,36 @@ async function triggerPike13Sync(): Promise<Pike13SyncResultDto> {
   return res.json()
 }
 
+async function fetchAnalytics(month: string): Promise<AnalyticsDto> {
+  const res = await fetch(`/api/admin/analytics?month=${encodeURIComponent(month)}`)
+  if (!res.ok) throw new Error('Failed to load analytics')
+  return res.json()
+}
+
+interface StatCardProps {
+  label: string
+  value: string | number
+  sub?: string
+  color?: string
+}
+
+function StatCard({ label, value, sub, color = 'text-slate-800' }: StatCardProps) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">{label}</p>
+      <p className={`mt-1 text-2xl font-bold ${color}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
+    </div>
+  )
+}
+
 export function AdminDashboardPage() {
   const queryClient = useQueryClient()
+  const search = useSearch()
+  const params = new URLSearchParams(search)
+  const month = params.get('month') ?? getCurrentMonth()
+
+  const [showAllNotifications, setShowAllNotifications] = useState(false)
 
   const { data: notifications = [], isLoading, error } = useQuery<AdminNotificationDto[]>({
     queryKey: ['admin', 'notifications'],
@@ -42,6 +88,11 @@ export function AdminDashboardPage() {
   const { data: pike13Status } = useQuery<Pike13StatusDto>({
     queryKey: ['admin', 'pike13', 'status'],
     queryFn: fetchPike13Status,
+  })
+
+  const { data: analytics } = useQuery<AnalyticsDto>({
+    queryKey: ['admin', 'analytics', month],
+    queryFn: () => fetchAnalytics(month),
   })
 
   const unreadCount = notifications.filter((n) => !n.isRead).length
@@ -55,60 +106,131 @@ export function AdminDashboardPage() {
     mutationFn: triggerPike13Sync,
   })
 
+  const visibleNotifications = showAllNotifications
+    ? notifications
+    : notifications.filter((n) => !n.isRead)
+
   return (
-    <div className="max-w-3xl">
-      <div className="mb-6 flex items-center gap-3">
-        <h1 className="text-2xl font-bold text-slate-800">Admin Dashboard</h1>
-        {unreadCount > 0 && (
-          <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white">
-            {unreadCount}
-          </span>
-        )}
+    <div className="max-w-4xl space-y-8">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-800">Admin Dashboard</h1>
+          {unreadCount > 0 && (
+            <span className="rounded-full bg-red-500 px-2 py-0.5 text-xs font-bold text-white">
+              {unreadCount}
+            </span>
+          )}
+        </div>
+        <MonthPicker />
       </div>
 
-      {isLoading && <p className="text-slate-500">Loading…</p>}
-      {error && <p className="text-red-600">Failed to load notifications.</p>}
+      {/* Analytics section */}
+      {analytics && (
+        <section>
+          <h2 className="mb-3 text-lg font-semibold text-slate-700">Review Analytics — {analytics.month}</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            <StatCard
+              label="Sent this month"
+              value={analytics.totalSent}
+              color="text-green-600"
+            />
+            <StatCard
+              label="Still need to send"
+              value={analytics.needToSend}
+              color={analytics.needToSend > 0 ? 'text-amber-600' : 'text-slate-400'}
+            />
+            <StatCard
+              label="Feedback received"
+              value={analytics.monthFeedbackCount}
+              sub={`${analytics.feedbackRate}% response rate`}
+              color="text-blue-600"
+            />
+            <StatCard
+              label="Avg rating"
+              value={analytics.avgRating !== null ? `${analytics.avgRating} / 5` : '—'}
+              sub={`${analytics.totalFeedback} total responses`}
+              color="text-purple-600"
+            />
+          </div>
 
-      {!isLoading && notifications.length === 0 && (
-        <p className="text-slate-500">No notifications.</p>
+          {analytics.topSuggestions.length > 0 && (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide mb-3">Top Improvement Suggestions</p>
+              <ul className="space-y-2">
+                {analytics.topSuggestions.map((s, i) => (
+                  <li key={i} className="flex items-center justify-between text-sm">
+                    <span className="text-slate-700">{s.suggestion ?? '—'}</span>
+                    <span className="ml-4 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-600">
+                      {s.count}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </section>
       )}
 
-      {notifications.length > 0 && (
-        <ul className="space-y-3">
-          {notifications
-            .filter((n) => !n.isRead)
-            .map((n) => (
+      {/* Notifications section */}
+      <section>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-lg font-semibold text-slate-700">Notifications</h2>
+          {notifications.length > 0 && (
+            <button
+              onClick={() => setShowAllNotifications((v) => !v)}
+              className="text-xs text-blue-600 hover:underline"
+            >
+              {showAllNotifications ? 'Show unread only' : `Show all (${notifications.length})`}
+            </button>
+          )}
+        </div>
+
+        {isLoading && <p className="text-slate-500">Loading…</p>}
+        {error && <p className="text-red-600">Failed to load notifications.</p>}
+
+        {!isLoading && visibleNotifications.length === 0 && (
+          <p className="text-slate-500 text-sm">No unread notifications.</p>
+        )}
+
+        {visibleNotifications.length > 0 && (
+          <ul className="space-y-3">
+            {visibleNotifications.map((n) => (
               <li
                 key={n.id}
-                className="flex items-start justify-between rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm"
+                className={`flex items-start justify-between rounded-lg border px-4 py-3 shadow-sm ${
+                  n.isRead ? 'border-slate-100 bg-slate-50' : 'border-slate-200 bg-white'
+                }`}
               >
                 <div>
-                  <p className="text-sm font-medium text-slate-800">{n.fromUserName}</p>
+                  <p className={`text-sm font-medium ${n.isRead ? 'text-slate-500' : 'text-slate-800'}`}>{n.fromUserName}</p>
                   <p className="mt-0.5 text-sm text-slate-600">{n.message}</p>
                   <p className="mt-1 text-xs text-slate-400">
                     {new Date(n.createdAt).toLocaleDateString()}
                   </p>
                 </div>
-                <button
-                  onClick={() => markReadMutation.mutate(n.id)}
-                  disabled={markReadMutation.isPending}
-                  className="ml-4 shrink-0 rounded bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-50"
-                >
-                  Mark as Read
-                </button>
+                {!n.isRead && (
+                  <button
+                    onClick={() => markReadMutation.mutate(n.id)}
+                    disabled={markReadMutation.isPending}
+                    className="ml-4 shrink-0 rounded bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-200 disabled:opacity-50"
+                  >
+                    Mark as Read
+                  </button>
+                )}
               </li>
             ))}
-        </ul>
-      )}
+          </ul>
+        )}
+      </section>
 
       {/* Pike13 section */}
       {pike13Status !== undefined && (
-        <section className="mt-8">
-          <h2 className="text-xl font-semibold text-slate-800 mb-3">Pike13</h2>
+        <section>
+          <h2 className="text-lg font-semibold text-slate-700 mb-3">Pike13</h2>
 
           {pike13Status.connected ? (
             <div className="space-y-3">
-              <p className="font-medium text-green-600">Pike13: Connected</p>
+              <p className="font-medium text-green-600">Connected</p>
               <button
                 onClick={() => syncMutation.mutate()}
                 disabled={syncMutation.isPending}
@@ -131,7 +253,7 @@ export function AdminDashboardPage() {
             </div>
           ) : (
             <div className="space-y-3">
-              <p className="text-slate-600">Pike13: Not Connected</p>
+              <p className="text-slate-600">Not Connected</p>
               <button
                 onClick={() => { window.location.href = '/api/admin/pike13/connect' }}
                 className="rounded bg-slate-700 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800"

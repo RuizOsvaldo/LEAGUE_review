@@ -8,7 +8,7 @@ async function fetchFeedback(): Promise<AdminFeedbackDto[]> {
   return res.json()
 }
 
-type SortKey = 'studentName' | 'instructorName' | 'month' | 'rating' | 'submittedAt'
+type SortKey = 'studentName' | 'instructorName' | 'month' | 'rating' | 'submittedAt' | 'suggestion'
 type SortDir = 'asc' | 'desc'
 
 function SortIcon({ col, sortKey, sortDir }: { col: SortKey; sortKey: SortKey; sortDir: SortDir }) {
@@ -38,6 +38,7 @@ export function AdminFeedbackPage() {
       else if (sortKey === 'month') cmp = a.month.localeCompare(b.month)
       else if (sortKey === 'rating') cmp = a.rating - b.rating
       else if (sortKey === 'submittedAt') cmp = new Date(a.submittedAt).getTime() - new Date(b.submittedAt).getTime()
+      else if (sortKey === 'suggestion') cmp = (a.suggestion ?? '').localeCompare(b.suggestion ?? '')
       return sortDir === 'asc' ? cmp : -cmp
     })
   }, [rows, sortKey, sortDir])
@@ -67,6 +68,9 @@ export function AdminFeedbackPage() {
                 <th className={thClass} onClick={() => handleSort('rating')}>
                   Rating <SortIcon col="rating" sortKey={sortKey} sortDir={sortDir} />
                 </th>
+                <th className={thClass} onClick={() => handleSort('suggestion')}>
+                  Suggestion <SortIcon col="suggestion" sortKey={sortKey} sortDir={sortDir} />
+                </th>
                 <th className="px-4 py-3 text-left font-medium text-slate-600">Comment</th>
                 <th className={thClass} onClick={() => handleSort('submittedAt')}>
                   Submitted <SortIcon col="submittedAt" sortKey={sortKey} sortDir={sortDir} />
@@ -80,6 +84,7 @@ export function AdminFeedbackPage() {
                   <td className="px-4 py-3 text-slate-700">{r.instructorName}</td>
                   <td className="px-4 py-3 text-slate-700">{r.month}</td>
                   <td className="px-4 py-3 text-slate-700">{r.rating}</td>
+                  <td className="px-4 py-3 text-slate-600">{r.suggestion ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{r.comment ?? '—'}</td>
                   <td className="px-4 py-3 text-slate-600">{new Date(r.submittedAt).toLocaleDateString()}</td>
                 </tr>

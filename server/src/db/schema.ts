@@ -68,6 +68,7 @@ export const instructorStudents = pgTable(
       .notNull()
       .references(() => students.id),
     assignedAt: timestamp('assigned_at').notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at').notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.instructorId, t.studentId] })],
 );
@@ -116,6 +117,7 @@ export const serviceFeedback = pgTable('service_feedback', {
     .references(() => monthlyReviews.id),
   rating: integer('rating').notNull(), // 1–5
   comment: text('comment'),
+  suggestion: text('suggestion'), // selected service improvement suggestion
   submittedAt: timestamp('submitted_at').notNull().defaultNow(),
 });
 
@@ -176,10 +178,32 @@ export const volunteerHours = pgTable(
   (t) => [unique().on(t.source, t.externalId)],
 );
 
+export const studentAttendance = pgTable(
+  'student_attendance',
+  {
+    id: serial('id').primaryKey(),
+    studentId: integer('student_id').notNull().references(() => students.id),
+    instructorId: integer('instructor_id').notNull().references(() => instructors.id),
+    attendedAt: timestamp('attended_at', { withTimezone: true }).notNull(),
+    eventOccurrenceId: text('event_occurrence_id').notNull(),
+  },
+  (t) => [unique().on(t.studentId, t.instructorId, t.eventOccurrenceId)],
+);
+
 export const volunteerSchedule = pgTable('volunteer_schedule', {
   volunteerName: text('volunteer_name').primaryKey(),
   isScheduled: boolean('is_scheduled').notNull().default(false),
   updatedAt: timestamp('updated_at').notNull().defaultNow(),
+});
+
+export const volunteerEventSchedule = pgTable('volunteer_event_schedule', {
+  id: serial('id').primaryKey(),
+  eventOccurrenceId: text('event_occurrence_id').notNull().unique(),
+  startAt: timestamp('start_at', { withTimezone: true }).notNull(),
+  endAt: timestamp('end_at', { withTimezone: true }).notNull(),
+  instructors: json('instructors').notNull().$type<Array<{ pike13Id: number; name: string; instructorId: number | null; studentCount: number }>>(),
+  volunteers: json('volunteers').notNull().$type<Array<{ pike13Id: number; name: string }>>(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const pike13AdminToken = pgTable('pike13_admin_token', {
@@ -212,6 +236,9 @@ export type AdminNotification = typeof adminNotifications.$inferSelect;
 export type NewAdminNotification = typeof adminNotifications.$inferInsert;
 export type VolunteerHour = typeof volunteerHours.$inferSelect;
 export type NewVolunteerHour = typeof volunteerHours.$inferInsert;
+export type StudentAttendance = typeof studentAttendance.$inferSelect;
+export type NewStudentAttendance = typeof studentAttendance.$inferInsert;
 export type VolunteerSchedule = typeof volunteerSchedule.$inferSelect;
+export type VolunteerEventSchedule = typeof volunteerEventSchedule.$inferSelect;
 export type Pike13AdminToken = typeof pike13AdminToken.$inferSelect;
 export type NewPike13AdminToken = typeof pike13AdminToken.$inferInsert;

@@ -48,6 +48,11 @@ export function ReviewEditorPage() {
   const [body, setBody] = useState('')
   const [dirty, setDirty] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
+  const [showTestSend, setShowTestSend] = useState(false)
+  const [testEmail, setTestEmail] = useState('')
+  const [testSendState, setTestSendState] = useState<'idle' | 'sending' | 'sent' | 'error'>('idle')
+  const [generateState, setGenerateState] = useState<'idle' | 'loading' | 'error'>('idle')
+  const [generateError, setGenerateError] = useState('')
 
   useEffect(() => {
     if (review) {
@@ -111,7 +116,17 @@ export function ReviewEditorPage() {
       </div>
 
       <h1 className="text-xl font-bold text-slate-800 mb-1">{review.studentName}</h1>
-      <p className="text-sm text-slate-500 mb-4">{month}</p>
+      <div className="flex items-center gap-3 mb-4">
+        <span className="text-sm text-slate-500">{month}</span>
+        {review.githubUsername && (
+          <span className="inline-flex items-center gap-1 text-xs text-slate-500">
+            <svg className="h-3.5 w-3.5" viewBox="0 0 16 16" fill="currentColor">
+              <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+            </svg>
+            @{review.githubUsername}
+          </span>
+        )}
+      </div>
 
       {isSent && (
         <div className="mb-4 rounded bg-green-50 border border-green-200 px-3 py-2 text-sm text-green-700">
@@ -158,18 +173,84 @@ export function ReviewEditorPage() {
           </Button>
           <Button
             variant="outline"
-            disabled
-            title="Available in Sprint 6"
+            disabled={!review.githubUsername || generateState === 'loading'}
+            title={review.githubUsername ? 'Generate a draft using GitHub commits this month' : 'No GitHub username linked for this student'}
+            onClick={async () => {
+              setGenerateState('loading')
+              setGenerateError('')
+              try {
+                const res = await fetch(`/api/reviews/${id}/generate-github-draft`, { method: 'POST' })
+                if (!res.ok) {
+                  const data = await res.json().catch(() => ({}))
+                  throw new Error(data.error ?? 'Generation failed')
+                }
+                const data = await res.json() as { body: string; commitCount: number; repoCount: number }
+                setBody(data.body)
+                setDirty(true)
+                setGenerateState('idle')
+              } catch (err) {
+                setGenerateError((err as Error).message)
+                setGenerateState('error')
+              }
+            }}
           >
-            Generate from GitHub
+            {generateState === 'loading' ? 'Generating…' : 'Generate from GitHub'}
+          </Button>
+              <Button
+            variant="outline"
+            onClick={() => { setShowTestSend((v) => !v); setTestSendState('idle') }}
+          >
+            Send Test Email
           </Button>
           <Button
             onClick={() => sendMutation.mutate()}
             disabled={sendMutation.isPending}
             className="bg-green-600 hover:bg-green-700"
           >
-            {sendMutation.isPending ? 'Sending…' : 'Mark as Sent'}
+            {sendMutation.isPending ? 'Sending…' : 'Send to Guardian'}
           </Button>
+        </div>
+      )}
+
+      {!isSent && showTestSend && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-4">
+          <p className="mb-2 text-sm font-semibold text-amber-800">Send a test copy to any email address</p>
+          <p className="mb-3 text-xs text-amber-700">The review status won't change — this is just a preview of what the guardian will receive.</p>
+          <div className="flex gap-2">
+            <input
+              type="email"
+              value={testEmail}
+              onChange={(e) => { setTestEmail(e.target.value); setTestSendState('idle') }}
+              placeholder="you@jointheleague.org"
+              className="flex-1 rounded border border-amber-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400"
+            />
+            <Button
+              onClick={async () => {
+                setTestSendState('sending')
+                try {
+                  const res = await fetch(`/api/reviews/${id}/send-test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ testEmail }),
+                  })
+                  if (!res.ok) throw new Error()
+                  setTestSendState('sent')
+                } catch {
+                  setTestSendState('error')
+                }
+              }}
+              disabled={testSendState === 'sending' || !testEmail}
+              className="bg-amber-500 hover:bg-amber-600 text-white"
+            >
+              {testSendState === 'sending' ? 'Sending…' : 'Send Test'}
+            </Button>
+          </div>
+          {testSendState === 'sent' && (
+            <p className="mt-2 text-sm text-green-700">Test email sent to {testEmail}!</p>
+          )}
+          {testSendState === 'error' && (
+            <p className="mt-2 text-sm text-red-600">Failed to send test email. Check that SendGrid is configured.</p>
+          )}
         </div>
       )}
 
@@ -178,6 +259,9 @@ export function ReviewEditorPage() {
       )}
       {sendMutation.isError && (
         <p className="mt-2 text-sm text-red-600">Failed to mark as sent. Please try again.</p>
+      )}
+      {generateState === 'error' && (
+        <p className="mt-2 text-sm text-red-600">Generate failed: {generateError}</p>
       )}
 
       {showTemplates && templates.length > 0 && (
