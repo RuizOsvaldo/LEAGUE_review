@@ -1,6 +1,7 @@
 import { eq, sql, and } from 'drizzle-orm';
-import { drizzle } from 'drizzle-orm/node-postgres';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 import * as schema from '../db/schema';
+import { sqlite } from '../db';
 
 /** Pike13 custom field key for the student's GitHub account name */
 export const PIKE13_GITHUB_FIELD_KEY = 'github_acct_name';
@@ -308,9 +309,9 @@ export async function runSync(
 
   // Delete stale events:
   // 1. Remove anything before this week's Sunday
-  await db.execute(sql`
+  db.run(sql`
     DELETE FROM volunteer_event_schedule
-    WHERE start_at < ${thisWeekSunday}
+    WHERE start_at < ${thisWeekSunday.toISOString()}
   `);
 
   // 2. Remove events in the schedule window that Pike13 no longer returns
@@ -318,26 +319,30 @@ export async function runSync(
   //    Guard: skip if Pike13 returned nothing — treat empty as a potential API error.
   if (scheduleWindowEvents.length > 0) {
     const freshIds = scheduleWindowEvents.map((occ) => String(occ.id));
-    await db.execute(sql`
-      DELETE FROM volunteer_event_schedule
-      WHERE start_at >= ${thisWeekSunday}
-      AND NOT (event_occurrence_id = ANY(${freshIds}))
-    `);
+    // SQLite uses IN (...) instead of = ANY(...)
+    const placeholders = freshIds.map(() => '?').join(', ');
+    sqlite.prepare(
+      `DELETE FROM volunteer_event_schedule
+       WHERE start_at >= ?
+       AND event_occurrence_id NOT IN (${placeholders})`,
+    ).run(thisWeekSunday.toISOString(), ...freshIds);
   }
 
   // 7. Volunteer hours from YTD events (any non-instructor staff member).
   //    A volunteer can be listed on two simultaneous events — only count once per time slot.
 
   // Clean up existing duplicates using a CTE (same volunteer, same start time → keep lowest id).
-  await db.execute(sql`
-    WITH ranked AS (
-      SELECT id,
-             ROW_NUMBER() OVER (PARTITION BY volunteer_name, recorded_at ORDER BY id) AS rn
-      FROM volunteer_hours
-      WHERE source = 'pike13'
-    )
+  db.run(sql`
     DELETE FROM volunteer_hours
-    WHERE id IN (SELECT id FROM ranked WHERE rn > 1)
+    WHERE id IN (
+      SELECT id FROM (
+        SELECT id,
+               ROW_NUMBER() OVER (PARTITION BY volunteer_name, recorded_at ORDER BY id) AS rn
+        FROM volunteer_hours
+        WHERE source = 'pike13'
+      ) ranked
+      WHERE rn > 1
+    )
   `);
 
   // Track (staffId, start_at) slots already processed in this sync run to prevent

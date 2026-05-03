@@ -13,8 +13,8 @@ import express from 'express';
 import cors from 'cors';
 import pinoHttp from 'pino-http';
 import session from 'express-session';
-import connectPgSimple from 'connect-pg-simple';
-import { Pool } from 'pg';
+import BetterSQLite3Store from 'better-sqlite3-session-store';
+import { sqlite } from './db';
 import { healthRouter } from './routes/health';
 import { counterRouter } from './routes/counter';
 import { authRouter } from './routes/auth';
@@ -41,14 +41,12 @@ app.use('/api', slackRouter);
 app.use(express.json());
 app.use(pinoHttp({ level: process.env.LOG_LEVEL || 'info' }));
 
-// Session middleware — use PG store when DATABASE_URL is set and not in test mode
+// Session store: SQLiteStore for persistent sessions across server restarts.
+// In test mode fall back to MemoryStore to avoid file-system side effects.
+const SQLiteStore = BetterSQLite3Store(session);
 const sessionStore =
-  process.env.DATABASE_URL && process.env.NODE_ENV !== 'test'
-    ? (() => {
-        const PgSession = connectPgSimple(session);
-        const pgPool = new Pool({ connectionString: process.env.DATABASE_URL });
-        return new PgSession({ pool: pgPool, tableName: 'sessions', createTableIfMissing: false });
-      })()
+  process.env.NODE_ENV !== 'test'
+    ? new SQLiteStore({ client: sqlite })
     : undefined; // express-session defaults to MemoryStore
 
 app.use(
