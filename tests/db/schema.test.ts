@@ -1,28 +1,29 @@
 /**
  * DB schema round-trip tests.
  *
- * Uses the server's SQLite database (better-sqlite3).
- * Migrations must be applied before running: npm run db:migrate
+ * Uses an in-memory SQLite database (better-sqlite3) — no external
+ * database or DATABASE_URL environment variable required.
  */
+import path from 'path';
+import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
+import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
 import * as schema from '../../server/src/db/schema';
 import { eq } from 'drizzle-orm';
-import { db } from '../../server/src/db';
 
-beforeAll(async () => {
-  // Clean up any leftover test data in reverse FK order
-  await db.delete(schema.volunteerHours);
-  await db.delete(schema.taCheckins);
-  await db.delete(schema.adminNotifications);
-  await db.delete(schema.pike13Tokens);
-  await db.delete(schema.serviceFeedback);
-  await db.delete(schema.reviewTemplates);
-  await db.delete(schema.monthlyReviews);
-  await db.delete(schema.instructorStudents);
-  await db.delete(schema.instructors);
-  await db.delete(schema.students);
-  await db.delete(schema.adminSettings);
-  await db.delete(schema.sessions);
-  await db.delete(schema.users);
+let sqlite: InstanceType<typeof Database>;
+let db: ReturnType<typeof drizzle<typeof schema>>;
+
+beforeAll(() => {
+  sqlite = new Database(':memory:');
+  db = drizzle(sqlite, { schema });
+  migrate(db, {
+    migrationsFolder: path.resolve(__dirname, '../../server/drizzle'),
+  });
+});
+
+afterAll(() => {
+  sqlite.close();
 });
 
 describe('users', () => {
