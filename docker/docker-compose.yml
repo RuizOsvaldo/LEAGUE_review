@@ -1,0 +1,38 @@
+# Docker development environment
+# Usage: docker compose up --build
+#
+# For local Docker (same machine), uncomment the volume mounts below
+# to enable hot-reload. For remote Docker contexts (SSH), leave them
+# commented out — the code is baked into the image at build time.
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server.dev
+    environment:
+      DATABASE_URL: file:/app/data/dev.db
+      NODE_ENV: development
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    volumes:
+      - sqlite-data:/app/data
+    # Uncomment for local Docker with hot-reload:
+    # - ./server/src:/app/src
+
+  client:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.client.dev
+    environment:
+      VITE_API_URL: http://server:3000
+    ports:
+      - "5173:5173"
+    # Uncomment for local Docker with hot-reload:
+    # volumes:
+    #   - ./client/src:/app/src
+    depends_on:
+      - server
+
+volumes:
+  sqlite-data:

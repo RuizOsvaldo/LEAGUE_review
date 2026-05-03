@@ -1,0 +1,30 @@
+# Production Docker Swarm stack
+# Usage: TAG=v1 docker stack deploy -c docker/docker-compose.prod.yml myapp
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    image: ${REGISTRY:-registry.local}/myapp-server:${TAG:-latest}
+    secrets:
+      - session_secret
+    entrypoint: ["/app/entrypoint.sh"]
+    command: ["node", "dist/index.js"]
+    environment:
+      DATABASE_URL: file:/app/data/prod.db
+      NODE_ENV: production
+      PORT: "3000"
+    volumes:
+      - sqlite-data:/app/data
+    deploy:
+      labels:
+        caddy: ${APP_DOMAIN:-myapp.jtlapp.net}
+        caddy.reverse_proxy: "{{upstreams 3000}}"
+      replicas: 2
+
+secrets:
+  session_secret:
+    external: true
+
+volumes:
+  sqlite-data:
