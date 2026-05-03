@@ -95,7 +95,10 @@ export async function runSync(
   accessToken: string,
   fetchFn: typeof fetch = fetch,
 ): Promise<SyncResult> {
-  const base = (process.env.PIKE13_BASE_URL ?? 'https://pike13.com').replace(/\/$/, '');
+  // PIKE13_API_BASE is the tenant API root (e.g. https://jtl.pike13.com/api/v2/desk);
+  // we append our own /api/v2/desk/... paths, so use just the origin.
+  const apiBase = process.env.PIKE13_API_BASE ?? 'https://pike13.com';
+  const base = new URL(apiBase).origin;
   const ytdStart = `${new Date().getFullYear()}-01-01`;
   const now = new Date();
 
