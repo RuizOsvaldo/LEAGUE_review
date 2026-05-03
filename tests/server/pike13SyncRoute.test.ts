@@ -89,6 +89,7 @@ describe('POST /api/admin/sync/pike13 — sync', () => {
     await db.insert(schema.pike13AdminToken).values({ accessToken: 'valid-token' });
     mockRunSync.mockResolvedValueOnce({
       studentsUpserted: 10,
+      instructorsUpserted: 0,
       assignmentsCreated: 5,
       hoursCreated: 3,
     });
@@ -97,7 +98,7 @@ describe('POST /api/admin/sync/pike13 — sync', () => {
     const res = await agent.post('/api/admin/sync/pike13');
 
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ studentsUpserted: 10, assignmentsCreated: 5, hoursCreated: 3 });
+    expect(res.body).toEqual({ studentsUpserted: 10, instructorsUpserted: 0, assignmentsCreated: 5, hoursCreated: 3 });
     expect(mockRunSync).toHaveBeenCalledWith(expect.anything(), 'valid-token');
   });
 });

@@ -34,7 +34,7 @@ beforeAll(async () => {
   await db.delete(schema.serviceFeedback);
   await db.delete(schema.monthlyReviews);
   await db.delete(schema.instructorStudents);
-  const existingUser = (await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, 'test-admin-instr@example.com')))[0];
+  const existingUser = (await db.select({ id: schema.users.id }).from(schema.users).where(eq(schema.users.email, 'test-admin-instr@test.local')))[0];
   if (existingUser) {
     await db.delete(schema.instructors).where(eq(schema.instructors.userId, existingUser.id));
     await db.delete(schema.users).where(eq(schema.users.id, existingUser.id));
@@ -43,7 +43,7 @@ beforeAll(async () => {
   // Create a test instructor user
   const [user] = await db
     .insert(schema.users)
-    .values({ email: 'test-admin-instr@example.com', name: 'Test Instructor' })
+    .values({ email: 'test-admin-instr@test.local', name: 'Test Instructor' })
     .returning();
 
   const [instr] = await db
@@ -65,7 +65,7 @@ afterAll(async () => {
   await db.delete(schema.adminNotifications).where(eq(schema.adminNotifications.id, adminNotifId));
   await db.delete(schema.instructorStudents).where(eq(schema.instructorStudents.instructorId, instructorId));
   await db.delete(schema.instructors).where(eq(schema.instructors.id, instructorId));
-  await db.delete(schema.users).where(eq(schema.users.email, 'test-admin-instr@example.com'));
+  await db.delete(schema.users).where(eq(schema.users.email, 'test-admin-instr@test.local'));
 });
 
 // ---- Auth guards ----

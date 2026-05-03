@@ -28,6 +28,14 @@ import { feedbackRouter } from './routes/feedback';
 import { errorHandler } from './middleware/errorHandler';
 import { startScheduler } from './services/scheduler';
 import { slackRouter } from './routes/slack';
+import type { SessionUser } from './types/session';
+
+// Test personas used by POST /api/auth/login in test mode
+const TEST_USERS: Record<string, SessionUser> = {
+  admin: { id: 0, name: 'Test Admin', email: 'admin@test.local', isAdmin: true, isActiveInstructor: false },
+  instructor: { id: 1, name: 'Test Instructor', email: 'instructor@test.local', isAdmin: false, isActiveInstructor: true, instructorId: 1 },
+  inactive: { id: 2, name: 'Inactive User', email: 'inactive@test.local', isAdmin: false, isActiveInstructor: false },
+};
 
 const app = express();
 const port = parseInt(process.env.PORT || '3000', 10);
@@ -62,6 +70,21 @@ app.use(
     },
   }),
 );
+
+// Test-only login endpoint: accepts { role } and creates a session with a test persona.
+// Only available in test mode (NODE_ENV=test) so it is never exposed in production.
+if (process.env.NODE_ENV === 'test') {
+  app.post('/api/auth/login', (req, res) => {
+    const { role } = req.body as { role?: string };
+    const user = role ? TEST_USERS[role] : undefined;
+    if (!user) {
+      res.status(400).json({ error: 'Invalid role' });
+      return;
+    }
+    req.session.user = user;
+    res.json(user);
+  });
+}
 
 app.use('/api', healthRouter);
 app.use('/api', counterRouter);

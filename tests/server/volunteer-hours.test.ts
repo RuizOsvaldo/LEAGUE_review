@@ -106,9 +106,10 @@ describe('GET /api/admin/volunteer-hours', () => {
   let createdId: number;
 
   beforeAll(async () => {
+    // Volunteer hours are filtered by TA/VA name prefix, so use a matching name.
     const [row] = await db
       .insert(schema.volunteerHours)
-      .values({ volunteerName: 'Bob', category: 'Events', hours: 3.0 })
+      .values({ volunteerName: 'TA Bob', category: 'Events', hours: 3.0 })
       .returning();
     createdId = row.id;
   });
@@ -126,7 +127,7 @@ describe('GET /api/admin/volunteer-hours', () => {
     expect(Array.isArray(res.body)).toBe(true);
     const entry = res.body.find((r: { id: number }) => r.id === createdId);
     expect(entry).toBeDefined();
-    expect(entry.volunteerName).toBe('Bob');
+    expect(entry.volunteerName).toBe('TA Bob');
   });
 
   it('filters by category', async () => {
