@@ -22,7 +22,7 @@ export const users = sqliteTable('users', {
   createdAt: integer('created_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date()),
 });
 
-// connect-pg-simple requires sid/sess/expire columns
+// better-sqlite3-session-store requires sid/sess/expire columns
 export const sessions = sqliteTable('sessions', {
   sid: text('sid').primaryKey(),
   sess: text('sess', { mode: 'json' }).notNull(),

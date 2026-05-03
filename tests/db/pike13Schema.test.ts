@@ -1,33 +1,19 @@
 /**
  * Pike13 schema constraint tests.
  *
- * Requires a running PostgreSQL instance with DATABASE_URL set.
+ * Uses the server's SQLite database (better-sqlite3).
  * Migrations must be applied before running: npm run db:migrate
  */
-import { drizzle } from 'drizzle-orm/node-postgres';
-import { Pool } from 'pg';
 import * as schema from '../../server/src/db/schema';
-
-let pool: Pool;
-let db: ReturnType<typeof drizzle<typeof schema>>;
+import { db } from '../../server/src/db';
 
 beforeAll(async () => {
-  if (!process.env.DATABASE_URL) {
-    throw new Error('DATABASE_URL must be set for DB tests');
-  }
-  pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  db = drizzle(pool, { schema });
-
   await db.delete(schema.volunteerHours);
   await db.delete(schema.pike13AdminToken);
   await db.delete(schema.serviceFeedback);
   await db.delete(schema.monthlyReviews);
   await db.delete(schema.instructorStudents);
   await db.delete(schema.students);
-});
-
-afterAll(async () => {
-  await pool.end();
 });
 
 describe('students pike13SyncId unique constraint', () => {

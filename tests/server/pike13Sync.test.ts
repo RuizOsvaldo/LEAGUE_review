@@ -1,27 +1,19 @@
 /**
  * Pike13 sync service unit tests.
  *
- * Requires a running PostgreSQL instance with DATABASE_URL set.
+ * Uses the server's SQLite database (better-sqlite3).
  * Fetch is mocked — no real Pike13 network calls are made.
  */
-import { drizzle } from 'drizzle-orm/node-postgres';
 import { eq } from 'drizzle-orm';
-import { Pool } from 'pg';
 import * as schema from '../../server/src/db/schema';
 import { runSync, PIKE13_GITHUB_FIELD_KEY } from '../../server/src/services/pike13Sync';
-
-let pool: Pool;
-let db: ReturnType<typeof drizzle<typeof schema>>;
+import { db } from '../../server/src/db';
 
 let testUserId: number;
 let testInstructorId: number;
 const INSTRUCTOR_EMAIL = 'pike13sync-test@test.local';
 
 beforeAll(async () => {
-  if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL must be set');
-  pool = new Pool({ connectionString: process.env.DATABASE_URL });
-  db = drizzle(pool, { schema });
-
   // Broad cleanup in FK order so we can create a clean test instructor
   await db.delete(schema.volunteerHours);
   await db.delete(schema.instructorStudents);
@@ -57,7 +49,6 @@ afterAll(async () => {
   await db.delete(schema.students);
   await db.delete(schema.instructors).where(eq(schema.instructors.id, testInstructorId));
   await db.delete(schema.users).where(eq(schema.users.id, testUserId));
-  await pool.end();
 });
 
 afterEach(async () => {
