@@ -1,9 +1,16 @@
 ---
-id: "001"
-title: "Replace PostgreSQL with SQLite"
-status: planning
+id: '001'
+title: Replace PostgreSQL with SQLite
+status: done
 branch: sprint/001-replace-postgresql-with-sqlite
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005, SUC-006, SUC-007]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
+- SUC-007
 todo: docs/clasi/todo/replace-postgres-with-sqlite.md
 ---
 
